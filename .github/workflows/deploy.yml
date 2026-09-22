@@ -1,0 +1,74 @@
+# GitHub Pages 배포.
+#
+# next.config.ts 가 basePath 를 하드코딩하지 않고 PAGES_BASE_PATH 로 받는다.
+# 그 값은 actions/configure-pages 가 저장소 이름에서 계산해 준다 —
+# 저장소 이름이 바뀌어도 고칠 곳이 없다(docs/TECH-NOTES.md 4.1~4.2).
+#
+# artifact 방식이라 Jekyll 이 돌지 않는다. 그래서 `_next` 디렉터리가 잘리지
+# 않고, .nojekyll 파일도 필요 없다.
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 배포는 한 번에 하나만. 진행 중인 것을 끊지는 않는다.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # 배포물에 들어가기 전에 막는다. 판정 규칙이 깨진 채로 배포되면
+      # "링크만 열면 된다"는 이 프로젝트의 전제가 무너진다.
+      - name: Test
+        run: npm test
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Setup Pages
+        id: setup_pages
+        uses: actions/configure-pages@v5
+
+      - name: Build (static export)
+        run: npm run build
+        env:
+          PAGES_BASE_PATH: ${{ steps.setup_pages.outputs.base_path }}
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./out
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

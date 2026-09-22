@@ -1,0 +1,41 @@
+# 푸시·PR 마다 도는 검증.
+#
+# README 가 "테스트 281개 통과, lint 0, build 성공"이라고 적는 이상,
+# 그 주장을 증명하는 녹색 체크가 저장소에 있어야 한다.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # 판정 규칙 테스트 → 타입 → 린트 → 정적 내보내기.
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run build
+
+      # 커밋된 샘플이 생성 스크립트의 출력과 여전히 같은지.
+      # (같은 확인을 src/samples/samples.test.ts 도 하지만, 여기서 한 번 더
+      #  돌려 두면 "생성물을 손으로 고쳤다"가 CI 로그에 남는다.)
+      - name: Samples are reproducible
+        run: |
+          npm run samples
+          git diff --exit-code -- public/samples
