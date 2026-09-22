@@ -97,16 +97,37 @@ class LoadTimeoutError extends Error {
   }
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
+/**
+ * `onLate` 는 제한 시간이 지난 **뒤에** 원래 약속이 성공했을 때 불린다.
+ * 그 결과물을 아무도 들고 있지 않으므로 여기서 버려 주지 않으면
+ * WASM/GPU 자원이 그대로 남는다.
+ */
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  what: string,
+  onLate?: (value: T) => void,
+): Promise<T> {
   if (ms <= 0) return promise;
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new LoadTimeoutError(what, ms)), ms);
+    let settled = false;
+    const timer = setTimeout(() => {
+      settled = true;
+      reject(new LoadTimeoutError(what, ms));
+    }, ms);
     promise.then(
       (v) => {
+        if (settled) {
+          onLate?.(v);
+          return;
+        }
+        settled = true;
         clearTimeout(timer);
         resolve(v);
       },
       (e) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
         reject(e as Error);
       },
@@ -146,6 +167,8 @@ export async function createPoseEngine(opts: CreateOptions = {}): Promise<PoseEn
       }),
       timeout,
       "포즈 모델",
+      // 늦게 도착한 모델은 아무도 쓰지 않는다. 여기서 닫지 않으면 남는다.
+      (late) => late.close(),
     );
   };
 
