@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "generatedBy": "src/samples/write-samples.ts",
+  "note": "합성 시퀀스다. 촬영본이 아니며, 규칙이 옳다는 증명이 아니라 규칙이 의도대로 동작하는지를 보이는 회귀용 데이터다.",
+  "samples": [
+    {
+      "id": "frontkick-good",
+      "label": "앞차기 — 합격",
+      "motion": "frontKick",
+      "view": "sagittal",
+      "fps": 30,
+      "frameCount": 61,
+      "file": "frontkick-good.json",
+      "intent": "B1~B7 전부 합격. 10.0점."
+    },
+    {
+      "id": "frontkick-underextended",
+      "label": "앞차기 — 무릎이 덜 펴짐",
+      "motion": "frontKick",
+      "view": "sagittal",
+      "fps": 30,
+      "frameCount": 61,
+      "file": "frontkick-underextended.json",
+      "intent": "B4(펴짐)만 0.3 감점. 9.7점."
+    },
+    {
+      "id": "frontkick-balance-broken",
+      "label": "앞차기 — 균형이 무너진 시도",
+      "motion": "frontKick",
+      "view": "sagittal",
+      "fps": 30,
+      "frameCount": 61,
+      "file": "frontkick-balance-broken.json",
+      "intent": "B2(회수 생략) 0.3 + B5(상체 젖힘) 0.3 + B6(축발 흔들림) 0.1. 9.3점."
+    },
+    {
+      "id": "stance-good",
+      "label": "주춤서기 — 합격",
+      "motion": "stance",
+      "view": "frontal",
+      "fps": 30,
+      "frameCount": 79,
+      "file": "stance-good.json",
+      "intent": "A1~A5 전부 합격. 10.0점."
+    },
+    {
+      "id": "stance-narrow",
+      "label": "주춤서기 — 발 간격 좁음",
+      "motion": "stance",
+      "view": "frontal",
+      "fps": 30,
+      "frameCount": 79,
+      "file": "stance-narrow.json",
+      "intent": "A1(발 간격)만 0.3 감점. 9.7점."
+    },
+    {
+      "id": "frontkick-occluded",
+      "label": "앞차기 — 관절이 가려짐",
+      "motion": "frontKick",
+      "view": "sagittal",
+      "fps": 30,
+      "frameCount": 61,
+      "file": "frontkick-occluded.json",
+      "intent": "H1로 무효 프레임이 생기고 그 비율이 20%를 넘어 H2 전체 보류."
+    },
+    {
+      "id": "frontkick-dropped-frames",
+      "label": "앞차기 — 프레임이 끊김",
+      "motion": "frontKick",
+      "view": "sagittal",
+      "fps": 30,
+      "frameCount": 55,
+      "file": "frontkick-dropped-frames.json",
+      "intent": "인접 프레임 간격이 120ms를 넘어 H3 전체 보류."
+    }
+  ]
+}
