@@ -190,6 +190,19 @@ export function FollowGame() {
   const course: Course = useMemo(() => courseById(courseId), [courseId]);
   const pose: ReferencePose = useMemo(() => referencePose(course.poseId), [course.poseId]);
 
+  /**
+   * 이 코스가 시연에 쓸 샘플이 전부 손에 들어왔는가.
+   *
+   * 샘플을 못 읽은 채로 시작하면 흘려보낼 프레임이 없어 **다섯 라운드가 전부 보류**로
+   * 끝난다. 코어는 그 경우에도 점수를 지어내지 않고 "판정할 창을 하나도 세우지 못했다"고
+   * 말하지만, 처음 열어 본 사람에게는 게임이 고장난 것으로 보인다. 그래서 시작 자체를
+   * 막는다 — 보류는 판정의 결론이어야지, 파일을 덜 읽었다는 뜻이면 안 된다.
+   */
+  const demoReady = useMemo(
+    () => course.rounds.every((r) => samples.some((s) => s.id === r.demoSampleId)),
+    [course.rounds, samples],
+  );
+
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const loopRef = useRef<LoopState>(emptyLoop());
   const effectsRef = useRef<EffectLayer>(new EffectLayer());
@@ -775,10 +788,14 @@ export function FollowGame() {
           <button
             type="button"
             className={styles.primary}
-            disabled={mode === "webcam" && !webcamRunning}
+            disabled={(mode === "webcam" && !webcamRunning) || (mode === "demo" && !demoReady)}
             onClick={start}
           >
-            {mode === "webcam" && !webcamRunning ? "카메라를 먼저 켜 주세요" : "시작하기"}
+            {mode === "webcam" && !webcamRunning
+              ? "카메라를 먼저 켜 주세요"
+              : mode === "demo" && !demoReady
+                ? "샘플을 읽는 중…"
+                : "시작하기"}
           </button>
 
           <p className={styles.meta}>교본 근거: {pose.sourceNote}</p>
