@@ -169,6 +169,24 @@ export interface HudState {
   verdictProgress: number;
   poseName: string;
   cue: string;
+  /**
+   * 성공·우수 문턱. **여기서 70·90을 손으로 적지 않는다** — 문턱은 `@/follow` 의
+   * `SUCCESS_BASE_SCORE` 와 별 셋의 문턱이고, 같은 화면의 다른 곳(라운드 막대)이
+   * 이미 그 상수를 읽고 있다. 두 곳이 같은 문턱을 다른 출처로 쓰면 언젠가 갈라진다.
+   */
+  successThreshold: number;
+  excellentThreshold: number;
+  /**
+   * 되감기 구간의 길이(초). **게임의 2초 창이 아니라 판정이 실제로 읽은 구간**이다
+   * (`findStanceWindow` 가 창 안에서 또 한 번 고른다). null 이면 길이를 말하지 않는다.
+   */
+  replaySeconds: number | null;
+  /**
+   * 움직임을 줄여 달라고 했는가. 효과 층만 이 선호를 지키고 HUD 는 안 지키면,
+   * 꺼지는 것은 부수적인 장식뿐이고 **화면에서 가장 크고 가장 가운데 있는 것**
+   * (132px 카운트다운, 튀어오르는 점수)이 계속 움직인다.
+   */
+  reducedMotion: boolean;
 }
 
 function pill(
@@ -260,10 +278,11 @@ export function drawHud(
     const n = hud.countdown;
     const frac = n - Math.floor(n);
     const digit = Math.max(1, Math.ceil(n));
-    const pop = 1 + 0.35 * frac; // 1초마다 커졌다 작아진다
+    // 움직임을 줄여 달라고 했으면 숫자와 링은 **보이되 움직이지 않는다**.
+    const pop = hud.reducedMotion ? 1 : 1 + 0.35 * frac; // 1초마다 커졌다 작아진다
     ctx.save();
     ctx.translate(width / 2, height / 2);
-    ctx.globalAlpha = 0.28 + 0.72 * (1 - frac);
+    ctx.globalAlpha = hud.reducedMotion ? 1 : 0.28 + 0.72 * (1 - frac);
     ctx.scale(pop, pop);
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
@@ -277,7 +296,8 @@ export function drawHud(
     ctx.lineWidth = 5;
     ctx.globalAlpha = 0.9;
     ctx.beginPath();
-    ctx.arc(width / 2, height / 2, 108, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (1 - frac));
+    const sweep = hud.reducedMotion ? 1 : 1 - frac;
+    ctx.arc(width / 2, height / 2, 108, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * sweep);
     ctx.stroke();
     ctx.restore();
 
@@ -307,7 +327,7 @@ export function drawHud(
 
   // 판정 — 점수가 튀어오른다
   if (hud.phase === "verdict") {
-    const p = Math.min(1, hud.verdictProgress / 0.35);
+    const p = hud.reducedMotion ? 1 : Math.min(1, hud.verdictProgress / 0.35);
     const ease = 1 - Math.pow(1 - p, 3);
     ctx.save();
     ctx.translate(width / 2, height / 2 - 18);
@@ -323,9 +343,14 @@ export function drawHud(
       ctx.font = `500 17px ${FONT}`;
       ctx.fillText("점수를 지어내지 않습니다", 0, 52);
     } else {
-      const shown = Math.round(hud.verdictBase * Math.min(1, hud.verdictProgress / 0.5));
+      const grow = hud.reducedMotion ? 1 : Math.min(1, hud.verdictProgress / 0.5);
+      const shown = Math.round(hud.verdictBase * grow);
       ctx.fillStyle =
-        hud.verdictBase >= 90 ? COLORS.ok : hud.verdictBase >= 70 ? COLORS.brand : COLORS.warn;
+        hud.verdictBase >= hud.excellentThreshold
+          ? COLORS.ok
+          : hud.verdictBase >= hud.successThreshold
+            ? COLORS.brand
+            : COLORS.warn;
       ctx.font = `800 104px ${FONT}`;
       ctx.fillText(String(shown), 0, 0);
       ctx.fillStyle = COLORS.muted;
@@ -333,7 +358,13 @@ export function drawHud(
       ctx.fillText("기본점", 0, 64);
     }
     ctx.restore();
-    pill(ctx, "가장 잘 맞은 2초를 되감는 중", 16, height - 30, 14, COLORS.muted);
+    // 되감는 것은 **2초 창이 아니다.** 판정이 창 안에서 다시 고른 구간이라
+    // 주춤서기는 1.4초, 앞차기는 0.7초쯤이다. 길이를 지어내지 않고 받은 값을 적는다.
+    const replay =
+      hud.replaySeconds === null
+        ? "판정이 실제로 읽은 구간을 되감는 중"
+        : `판정이 실제로 읽은 ${hud.replaySeconds.toFixed(1)}초를 되감는 중`;
+    pill(ctx, replay, 16, height - 30, 14, COLORS.muted);
   }
 
   ctx.restore();

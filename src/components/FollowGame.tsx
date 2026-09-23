@@ -15,6 +15,9 @@
  * 2. **기록기는 시작 신호에서 연다.** 카운트다운 동안의 준비 자세는 기록기에 들어갈 경로가
  *    없다 — 웹캠 훅의 4초 링버퍼를 그대로 쓰지 않고, 시작 신호 이후의 프레임만 담아
  *    `judgeRound` 에 넘긴다. 그 함수는 t = 0 이 시작 신호가 아니면 던진다.
+ *    **시각은 두 모드 모두 같은 축 위에 있다** — 시연은 예정 시각, 웹캠은 배치가 싣고 온
+ *    `epochMs`. 배치를 받은 시각으로 되짚던 예전 방식은 배치 지연만큼 모든 프레임을 뒤로
+ *    밀어, 시작 직전의 준비 자세를 기록 안으로 끌어들였다(아래 어댑터 주석).
  * 3. **시계는 하나.** rAF 가 주는 `timestamp` 만 본다. 프레임을 세지 않는다 — 메인 스레드가
  *    1.5초 막히면 프레임 카운트는 없는 1.49초를 화면에 남긴다(실측).
  * 4. **맞추기 단계에서 메인 스레드를 120ms 넘게 잡지 않는다.** 성능이 아니라 정확성
@@ -39,13 +42,14 @@ import {
   type CardPoint,
 } from "@/card";
 import {
-  ANGLE_BAND,
   COURSES,
   PHASE_SECONDS,
+  STAR_THRESHOLDS,
   SUCCESS_BASE_SCORE,
   chooseOrientation,
   comboMultiplier,
   course as courseById,
+  demoTickTimes,
   judgeRound,
   mirrorFrame,
   referencePose,
@@ -59,7 +63,7 @@ import {
   type ReferencePose,
   type RoundResult,
 } from "@/follow";
-import type { Landmark, MotionKind, TimedFrame } from "@/judge/types";
+import type { CameraView, Landmark, MotionKind, TimedFrame } from "@/judge/types";
 import {
   DARK_THEME,
   MOTION_LABEL,
@@ -72,12 +76,12 @@ import {
 } from "@/pose";
 import { EffectLayer, drawHud, type GamePhase, type HudState } from "./gameDraw";
 import { Notice } from "./Notice";
+import { OverlayLegend } from "./OverlayLegend";
 import {
-  OVERLAY_COLORS,
   drawOverlay,
   fitReferenceStandalone,
   fitReferenceToFrame,
-  metricText,
+  metricDeltaText,
 } from "./overlay";
 import styles from "./game.module.css";
 
@@ -85,14 +89,32 @@ import styles from "./game.module.css";
 const W = 720;
 const H = 540;
 
+/**
+ * 이 폭(캔버스의 CSS 폭, px) 아래에서는 캔버스 위 숫자 라벨을 접는다.
+ *
+ * 375px 기기에서 캔버스 CSS 폭은 341px 인데 논리 폭이 720px 이라 배율이 0.47 이다.
+ * 15px 라벨이 7 CSS px 로 렌더돼 읽히지 않고, 라벨끼리 겹쳐 스켈레톤 위에 얼룩만 남는다.
+ * 같은 숫자는 바로 아래 곁 표에 큰 글씨로 다시 나오므로 정보는 잃지 않는다.
+ */
+const NARROW_CANVAS_PX = 480;
+
 /** 곁 패널을 새로 그리는 간격. 매 프레임 React 상태를 흔들지 않는다. */
 const PANEL_REFRESH_MS = 220;
+
+/**
+ * '우수' 문턱. **별 셋의 문턱과 같은 값**을 쓰고, 90을 손으로 적지 않는다.
+ * 문턱을 조정하는 날 화면의 색만 옛 기준으로 남는 일을 막는다.
+ */
+const EXCELLENT_BASE_SCORE = STAR_THRESHOLDS[STAR_THRESHOLDS.length - 1];
 
 const PRESENT_MS = PHASE_SECONDS.present * 1000;
 const READY_MS = PHASE_SECONDS.ready * 1000;
 const FEEDBACK_MS = PHASE_SECONDS.feedback * 1000;
 
 type Mode = "demo" | "webcam";
+
+/** 사용자가 선언할 수 있는 카메라 각도. 규칙이 전제하는 두 가지가 전부다. */
+const VIEW_CHOICES: readonly CameraView[] = ["frontal", "sagittal"];
 
 /**
  * 카드에 박을 날짜 — **보는 사람의 달력 날짜**다.
@@ -146,6 +168,12 @@ interface LoopState {
   seen: WeakSet<object>;
   lastView: RoundView | null;
   lastPanelPush: number;
+  /**
+   * 탭을 벗어난 동안인가. 참이면 단계 기계를 돌리지 않는다 —
+   * rAF 가 멈춘 사이에 시계만 흘러가서, 돌아온 첫 틱이 한 단계를 통째로 건너뛰거나
+   * 빈 기록으로 라운드를 끝내 버리는 것을 막는다.
+   */
+  suspended: boolean;
 }
 
 const emptyLoop = (): LoopState => ({
@@ -165,11 +193,23 @@ const emptyLoop = (): LoopState => ({
   seen: new WeakSet<object>(),
   lastView: null,
   lastPanelPush: 0,
+  suspended: false,
 });
 
 export function FollowGame() {
   const [mode, setMode] = useState<Mode>("demo");
   const [courseId, setCourseId] = useState<CourseId>("frontal");
+  /**
+   * 웹캠 모드에서 **사용자가 선언하는** 카메라 각도.
+   *
+   * 각도는 화면이 관측할 수 없으므로 시퀀스가 선언하고, 규칙의 전제와 다르면 H6으로
+   * 보류한다. 판정 화면에는 그 선택기가 있는데 게임에는 없었다 — 그러면서 화면은
+   * "각도가 다르면 H6으로 보류합니다"라고 약속하고 있었다. 게임이 언제나 코스의 각도를
+   * 그대로 넘기니 H6 은 **구조적으로 발화할 수 없는 약속**이었고, 앞차기 코스를 정면으로
+   * 서서 한 사람은 보류가 아니라 측면 산식으로 계산된 **틀린 점수**를 받았다.
+   * 문장을 약하게 고치는 대신 선택기를 만들어 약속을 참으로 만든다.
+   */
+  const [declaredView, setDeclaredView] = useState<CameraView>("frontal");
   const [samples, setSamples] = useState<PoseSequence[]>([]);
   const [loadNote, setLoadNote] = useState<string | null>(null);
 
@@ -190,6 +230,18 @@ export function FollowGame() {
   const course: Course = useMemo(() => courseById(courseId), [courseId]);
   const pose: ReferencePose = useMemo(() => referencePose(course.poseId), [course.poseId]);
 
+  // 코스를 바꾸면 선언 각도도 그 코스가 전제하는 값으로 돌아간다.
+  useEffect(() => setDeclaredView(course.view), [course.view]);
+
+  /**
+   * 판정에 넘길 카메라 각도.
+   *
+   * 시연 모드는 코스의 값이다 — 흘려보내는 샘플이 그 각도로 만들어져 있으므로 사용자가
+   * 선언할 것이 없다. 웹캠 모드에서만 사람이 선언한 값을 그대로 넘기고, 전제와 다르면
+   * 판정 코어가 H6으로 보류한다(게임이 대신 판단하지 않는다).
+   */
+  const judgeView: CameraView = mode === "webcam" ? declaredView : course.view;
+
   /**
    * 이 코스가 시연에 쓸 샘플이 전부 손에 들어왔는가.
    *
@@ -206,11 +258,13 @@ export function FollowGame() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const loopRef = useRef<LoopState>(emptyLoop());
   const effectsRef = useRef<EffectLayer>(new EffectLayer());
+  /** HUD 도 이 선호를 지켜야 한다. 캔버스에 그리는 쪽은 matchMedia 를 모른다. */
+  const reducedMotionRef = useRef(false);
   const liveFrameRef = useRef<PoseFrame | null>(null);
   const rafRef = useRef<number | null>(null);
   const revokeRef = useRef<(() => void) | null>(null);
 
-  const webcam = useWebcamPose(course.motion, course.view);
+  const webcam = useWebcamPose(course.motion, judgeView);
   const webcamRunning = webcam.status === "running";
   const mirror = mode === "webcam";
 
@@ -243,7 +297,10 @@ export function FollowGame() {
   // 접근성: 움직임을 줄이라고 한 사람에게는 플래시·파티클을 그리지 않는다.
   useEffect(() => {
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const apply = () => effectsRef.current.setReducedMotion(mq.matches);
+    const apply = () => {
+      reducedMotionRef.current = mq.matches;
+      effectsRef.current.setReducedMotion(mq.matches);
+    };
     apply();
     mq.addEventListener("change", apply);
     return () => mq.removeEventListener("change", apply);
@@ -268,9 +325,15 @@ export function FollowGame() {
    * 훅이 180ms마다 다시 만드는 최근 4초 시퀀스에서 **아직 보지 못한 프레임만** 꺼내 온다.
    * 좌표 배열의 신원(`f.world`)이 배치를 다시 만들어도 유지되기 때문에 중복 없이 이어 붙는다.
    *
-   * 시각은 배치 안의 상대 간격으로 복원한다 — 배치가 만들어진 시점과 이 효과가 도는 시점
-   * 사이의 상수 지연은 남지만, **프레임 사이 간격은 정확하다.** H3(120ms)이 보는 것이 그 간격이다.
-   * 시작 신호 이전(`rel < 0`)의 프레임은 여기서 버려진다 — 준비 자세가 채점될 경로가 없다.
+   * **시각은 배치가 싣고 온 `epochMs` 로 옮긴다.** 예전에는 이 효과가 도는 시각(`now`)에서
+   * 배치 안의 상대 간격을 빼서 되짚었는데, 그 시각은 마지막 프레임이 찍힌 시각보다 배치
+   * 지연 L 만큼 늦다. 대수로 쓰면 `rel = 참값 + L` 이고 L > 0 이 항상 참이므로,
+   * **참값이 [−L, 0) 인 준비 단계 프레임이 rel ≥ 0 으로 살아남아 채점 대상이 됐다.**
+   * `judgeRound` 의 음수 가드는 이 어댑터가 이미 버린 뒤에 도는 검사라 그 경로를 잡지 못한다.
+   * epoch 을 쓰면 편향이 0이고, 게임이 피하려던 함정(준비 자세 채점)이 두 모드 모두에서 닫힌다.
+   *
+   * epoch 이 없는 시퀀스는 이 경로에 오지 않는다(웹캠 훅만 이 효과를 먹인다).
+   * 그래도 오면 **기록하지 않는다** — 시각을 못 믿는 프레임을 채점하느니 보류가 낫다.
    */
   useEffect(() => {
     const seq = webcam.sequence;
@@ -279,14 +342,14 @@ export function FollowGame() {
 
     const st = loopRef.current;
     if (st.phase !== "capture") return;
-    const now = performance.now();
-    const lastT = seq.frames[seq.frames.length - 1].t;
+    const epoch = seq.epochMs;
+    if (epoch === undefined) return;
     const limitMs = (st.rounds[st.roundIndex]?.limitSeconds ?? 0) * 1000;
     let added = false;
     for (const f of seq.frames) {
       if (st.seen.has(f.world)) continue;
       st.seen.add(f.world);
-      const rel = now - (lastT - f.t) - st.captureStart;
+      const rel = epoch + f.t - st.captureStart;
       if (rel < 0 || rel > limitMs) continue;
       st.record.push({ t: rel, image: f.image, world: f.world });
       added = true;
@@ -328,7 +391,7 @@ export function FollowGame() {
       try {
         result = judgeRound({
           motion,
-          view: course.view,
+          view: judgeView,
           limitSeconds: round.limitSeconds,
           frames: timed,
           fps,
@@ -341,6 +404,9 @@ export function FollowGame() {
           `이 라운드를 채점하지 못했습니다: ${err instanceof Error ? err.message : String(err)}`,
         );
         st.combo = 0;
+        // 이전 라운드의 화면을 남겨 두지 않는다. 그냥 두면 판정 단계가 지난 라운드의
+        // 점수와 프레임을 되감으면서 '판정'이라고 적는다 — 실패한 라운드가 성공으로 보인다.
+        st.lastView = null;
         enter("verdict", ts);
         return;
       }
@@ -356,14 +422,15 @@ export function FollowGame() {
       const fx = effectsRef.current;
       const base = result.baseScore;
       if (result.success && base !== null) {
-        fx.flash(base >= 90 ? 0.4 : 0.25);
-        fx.burst(W / 2, H / 2, base >= 90 ? 220 : 120, base >= 90 ? "#56d98a" : "#7aa2f7");
+        const excellent = base >= EXCELLENT_BASE_SCORE;
+        fx.flash(excellent ? 0.4 : 0.25);
+        fx.burst(W / 2, H / 2, excellent ? 220 : 120, excellent ? "#56d98a" : "#7aa2f7");
       } else if (base !== null) {
         fx.burst(W / 2, H / 2, 60, "#f2c15b");
       }
       enter("verdict", ts);
     },
-    [course.id, course.view, enter, pose.judgedMotion, pose.labelKo],
+    [course.id, judgeView, enter, pose.judgedMotion, pose.labelKo],
   );
 
   const nextRound = useCallback(
@@ -390,6 +457,7 @@ export function FollowGame() {
       const canvas = canvasRef.current;
       const ctx = canvas?.getContext("2d");
       if (!canvas || !ctx) return;
+      const cssWidth = canvas.clientWidth || W;
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const tw = Math.round(W * dpr);
       const th = Math.round(H * dpr);
@@ -435,6 +503,8 @@ export function FollowGame() {
         player: displayed?.image ?? null,
         comparison: choice?.comparison ?? null,
         alpha: st.phase === "present" ? 1 : 0.95,
+        // 좁은 화면에서는 숫자 라벨을 접는다(위 NARROW_CANVAS_PX 주석). 링과 색은 남는다.
+        maxLabels: cssWidth < NARROW_CANVAS_PX ? 0 : 4,
       });
 
       effectsRef.current.draw(ctx, W, H, dtMs);
@@ -456,6 +526,12 @@ export function FollowGame() {
         verdictProgress: elapsed / FEEDBACK_MS,
         poseName: pose.labelKo,
         cue: pose.judgedMotion ? CUE[pose.judgedMotion] : "",
+        successThreshold: SUCCESS_BASE_SCORE,
+        excellentThreshold: EXCELLENT_BASE_SCORE,
+        // 되감기는 게임의 2초 창이 아니라 **판정이 실제로 읽은 구간**이다. 그 길이를 넘겨
+        // HUD 가 창 길이를 문자열에 박지 않게 한다(주춤서기 1.4초, 앞차기 0.7초 등).
+        replaySeconds: replaySecondsOf(st.lastView),
+        reducedMotion: reducedMotionRef.current,
       };
       drawHud(ctx, W, H, hud);
 
@@ -479,6 +555,13 @@ export function FollowGame() {
       const st = loopRef.current;
       const dt = st.lastTs === 0 ? 16 : ts - st.lastTs;
       st.lastTs = ts;
+      // 탭을 벗어난 동안에는 단계가 흐르지 않는다. 돌아오는 순간 `visibilitychange` 가
+      // 제시 단계부터 다시 세운다 — 그 전에 한 틱이라도 돌면 빈 기록으로 라운드가 끝난다.
+      if (st.suspended) {
+        drawFrame(ts, dt);
+        rafRef.current = requestAnimationFrame(tick);
+        return;
+      }
       const elapsed = ts - st.phaseStart;
       const round = st.rounds[st.roundIndex];
 
@@ -490,7 +573,10 @@ export function FollowGame() {
           if (elapsed >= READY_MS) {
             // 기록기를 여는 것은 여기 한 곳뿐이다. 이 순간이 t = 0 이다.
             st.record = [];
-            st.captureStart = ts;
+            // 시작 신호의 벽시계. rAF 의 `ts` 는 이 콜백이 실행되기 **전**(프레임 시작)의
+            // 시각이라 과거를 가리킨다. 그만큼 기록 창이 앞으로 벌어져 준비 단계 쪽을
+            // 먹으므로, 웹캠 프레임과 같은 축의 '지금'을 여기서도 쓴다.
+            st.captureStart = performance.now();
             st.seen = new WeakSet<object>();
             st.demoNextT = 0;
             st.demoK = 0;
@@ -523,25 +609,39 @@ export function FollowGame() {
   }, [phase, drawFrame, enter, finishRound, mode, nextRound]);
 
   /**
-   * 탭을 벗어나면 그 라운드를 **명시적으로 무효**로 하고 다시 제시한다.
+   * 탭을 벗어나면 그 라운드를 **명시적으로 무효**로 하고, 돌아왔을 때 제시부터 다시 한다.
    *
    * 그냥 두면 rAF가 멈춰 프레임 공백이 생기고, 어차피 H3(120ms)으로 보류가 된다.
    * "왜 갑자기 0점이지"를 겪게 하는 것보다 무효라고 말하고 다시 시작하는 편이 정직하다.
+   *
+   * 두 가지를 같이 지킨다.
+   *
+   * **(ㄱ) 다시 세우는 시각은 '돌아온 지금'이다.** 숨는 순간의 시각을 단계 시작으로 박으면
+   * rAF 가 멈춘 동안 시간만 흘러, 돌아온 첫 틱에서 제시(1.5초)가 통째로 건너뛰어진다 —
+   * 무슨 자세를 해야 하는지 보여 주는 유일한 단계다.
+   *
+   * **(ㄴ) 콤보는 끊는다.** 끊지 않으면 망한 라운드를 탭 전환 한 번으로 무한정 다시 할 수
+   * 있고 배수는 그대로 남는다. 점수와 별이 걸린 화면에서 그것은 재시도가 아니라 치트 경로다.
    */
   useEffect(() => {
     if (phase === "idle" || phase === "done") return;
-    const onHidden = () => {
-      if (document.visibilityState !== "hidden") return;
+    const onVisibility = () => {
       const st = loopRef.current;
       if (st.phase === "verdict" || st.phase === "done") return;
-      st.record = [];
-      st.demoNextT = 0;
-      st.demoK = 0;
-      setRoundNote("화면을 벗어나 이 라운드를 다시 합니다. 기록은 버렸습니다.");
+      if (document.visibilityState === "hidden") {
+        st.suspended = true;
+        st.record = [];
+        st.demoNextT = 0;
+        st.demoK = 0;
+        st.combo = 0;
+        setRoundNote("화면을 벗어나 이 라운드를 다시 합니다. 기록은 버리고 콤보도 끊깁니다.");
+        return;
+      }
+      st.suspended = false;
       enter("present", performance.now());
     };
-    document.addEventListener("visibilitychange", onHidden);
-    return () => document.removeEventListener("visibilitychange", onHidden);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
   }, [phase, enter]);
 
   /* ── 시작·정지 ─────────────────────────────────────────────────── */
@@ -583,10 +683,13 @@ export function FollowGame() {
     const s = summary;
     const list = loopRef.current.views;
     if (!s || list.length === 0) return null;
-    const bestIndex = s.bestRoundIndex ?? 0;
-    const best = list[bestIndex] ?? list[0];
-    const judgement = best.result.judgement ?? list.find((v) => v.result.judgement)?.result.judgement;
-    if (!judgement) return null;
+    // 채점된 라운드가 하나도 없으면 카드를 만들지 않는다. 예전에는 `?? 0` 으로 떨어져
+    // **잘 맞은 라운드가 하나도 없는데 1라운드를 지목**하는 카드가 나왔다.
+    const bestIndex = s.bestRoundIndex;
+    if (bestIndex === null) return null;
+    const best = list[bestIndex];
+    const judgement = best?.result.judgement ?? null;
+    if (!best || !judgement) return null;
 
     const hero = best.hero;
     const choice = hero ? chooseOrientation(pose, hero.world) : null;
@@ -661,11 +764,13 @@ export function FollowGame() {
   const saveCard = useCallback(async () => {
     if (!cardBlob) return;
     const how = await shareOrDownloadCard(cardName, cardBlob);
-    setCardNote(
+    const note =
       how === "shared"
         ? "공유 시트로 넘겼습니다."
-        : `${cardName} 을(를) 내려받았습니다. 영상 픽셀과 얼굴 좌표는 한 점도 들어 있지 않습니다.`,
-    );
+        : how === "cancelled"
+          ? "공유를 취소했습니다. 파일은 저장되지 않았습니다 — 아래 [PNG 내려받기]로 받을 수 있습니다."
+          : `${cardName} 을(를) 내려받았습니다. 영상 픽셀과 얼굴 좌표는 한 점도 들어 있지 않습니다.`;
+    setCardNote(note);
   }, [cardBlob, cardName]);
 
   const downloadOnly = useCallback(() => {
@@ -685,6 +790,27 @@ export function FollowGame() {
     verdict: "판정",
     done: "결과",
   };
+
+  /**
+   * 화면을 못 보는 사람에게 읽히는 줄.
+   *
+   * 게임의 내용은 전부 `aria-hidden` 캔버스 안에 있다. 단계 이름만 읽어 주면
+   * "교본 제시 · 1라운드"까지만 전해지고 **무슨 자세를 하라는 것인지도, 몇 점인지도**
+   * 전해지지 않는다. 컴포넌트가 이미 들고 있는 문자열을 여기서 같이 읽어 준다.
+   */
+  const lastResult = views.at(-1)?.result ?? null;
+  const liveText = (() => {
+    const head = `${phaseLabel[phase]} · ${roundIndex + 1}라운드`;
+    if (phase === "present" || phase === "ready") {
+      return `${head}. ${pose.labelKo}. ${pose.judgedMotion ? CUE[pose.judgedMotion] : ""}`;
+    }
+    if (phase === "verdict" && lastResult) {
+      return lastResult.status === "scored"
+        ? `${head}. 기본점 ${lastResult.baseScore}점, 라운드 ${lastResult.score}점.`
+        : `${head}. 보류 — ${lastResult.note}`;
+    }
+    return head;
+  })();
 
   return (
     <div className={styles.shell}>
@@ -757,20 +883,46 @@ export function FollowGame() {
           </div>
 
           {mode === "webcam" && (
-            <div className={styles.row}>
-              <button
-                type="button"
-                className={styles.ghostButton}
-                disabled={webcam.busy}
-                onClick={webcamRunning ? webcam.stop : webcam.start}
-              >
-                {webcam.busy ? "여는 중…" : webcamRunning ? "카메라 끄기" : "카메라 켜기"}
-              </button>
-              <span className={styles.hint}>
-                {webcam.message ||
-                  `${VIEW_LABEL[course.view]}에서 전신이 들어오게 서 주세요. 규칙이 전제하는 각도와 다르면 채점하지 않고 H6으로 보류합니다.`}
-              </span>
-            </div>
+            <>
+              <div className={styles.row}>
+                <button
+                  type="button"
+                  className={styles.ghostButton}
+                  disabled={webcam.busy}
+                  onClick={webcamRunning ? webcam.stop : webcam.start}
+                >
+                  {webcam.busy ? "여는 중…" : webcamRunning ? "카메라 끄기" : "카메라 켜기"}
+                </button>
+                <span className={styles.hint}>
+                  {webcam.message ||
+                    `${VIEW_LABEL[course.view]}에서 전신이 들어오게 서 주세요. 이 코스의 규칙은 그 각도를 전제합니다.`}
+                </span>
+              </div>
+
+              <div className={styles.row}>
+                <div className={styles.segmented} role="group" aria-label="카메라 각도 선언">
+                  {VIEW_CHOICES.map((v) => (
+                    <button
+                      key={v}
+                      type="button"
+                      className={`${styles.segment} ${v === declaredView ? styles.segmentActive : ""}`}
+                      aria-pressed={v === declaredView}
+                      onClick={() => setDeclaredView(v)}
+                    >
+                      {VIEW_LABEL[v]}에서 찍는 중
+                    </button>
+                  ))}
+                </div>
+                <span className={styles.hint}>
+                  각도는 화면이 관측할 수 없어 <strong>사람이 선언</strong>합니다. 이 코스가
+                  전제하는 각도는 {VIEW_LABEL[course.view]}이고, 다르게 선언하면 판정 코어가
+                  점수를 지어내지 않고 <strong>H6으로 보류</strong>합니다.
+                  {declaredView === course.view
+                    ? ""
+                    : " 지금 선언은 전제와 다릅니다 — 이대로 시작하면 다섯 라운드가 전부 보류입니다."}
+                </span>
+              </div>
+            </>
           )}
 
           {webcam.status === "denied" && (
@@ -848,7 +1000,7 @@ export function FollowGame() {
                 <canvas ref={canvasRef} className={styles.stageCanvas} aria-hidden="true" />
               </div>
               <p className={styles.srOnly} role="status" aria-live="polite">
-                {phaseLabel[phase]} · {roundIndex + 1}라운드
+                {liveText}
               </p>
               {roundNote && (
                 <Notice tone="warn" tag="라운드">
@@ -897,7 +1049,8 @@ export function FollowGame() {
                   </button>
                 </div>
                 <p className={styles.meta}>
-                  1080×1350 · 고정 배율 2. 기기가 달라도 같은 판정이면 같은 이미지가 나옵니다.
+                  1080×1350 · 고정 배율 2. 기기가 달라도 <strong>같은 판정 · 같은 날짜</strong>면
+                  같은 이미지가 나옵니다(카드에 들어가는 외부 값은 보는 사람의 달력 날짜 하나뿐입니다).
                   영상 픽셀은 한 점도 들어가지 않고(좌표에서 새로 그립니다), 얼굴 랜드마크 0~10번은
                   정제 단계에서 버려집니다. 모바일에서 내려받기가 막히면 이미지를 길게 눌러
                   저장하세요.
@@ -920,10 +1073,12 @@ export function FollowGame() {
                 </section>
 
                 <section className={styles.card} aria-label="교본과의 차이">
-                  <h2 className={styles.cardTitle}>교본과의 차이</h2>
+                  <h2 className={styles.cardTitle}>
+                    교본과의 차이 — {phase === "verdict" ? "되감는 프레임" : "지금 프레임"}
+                  </h2>
                   <MetricTable comparison={comparisonView} />
                   {orientationNote && <p className={styles.meta}>{orientationNote}</p>}
-                  <Legend />
+                  <OverlayLegend motion={pose.judgedMotion} />
                 </section>
               </>
             )}
@@ -969,6 +1124,16 @@ function buildView(result: RoundResult, frames: readonly PoseFrame[]): RoundView
   return { result, frames, replay, hero: replay[Math.floor(replay.length / 2)] ?? null };
 }
 
+/**
+ * 되감기 구간의 길이(초). **게임의 2초 창이 아니다** — 판정이 창 안에서 다시 고른 구간이다.
+ * HUD 가 "2초"를 문자열에 박지 않게 이 값을 넘긴다(주춤서기 1.4초, 앞차기 0.7초 등).
+ */
+function replaySecondsOf(view: RoundView | null): number | null {
+  if (!view || view.replay.length < 2) return null;
+  const span = view.replay[view.replay.length - 1].t - view.replay[0].t;
+  return span > 0 ? span / 1000 : null;
+}
+
 function RoundList({ views }: { views: readonly RoundView[] }) {
   if (views.length === 0) {
     return <p className={styles.hint}>아직 끝난 라운드가 없습니다.</p>;
@@ -987,7 +1152,7 @@ function RoundList({ views }: { views: readonly RoundView[] }) {
                 style={{
                   width: `${Math.max(0, Math.min(100, base))}%`,
                   background:
-                    base >= 90
+                    base >= EXCELLENT_BASE_SCORE
                       ? "var(--ok)"
                       : base >= SUCCESS_BASE_SCORE
                         ? "var(--brand)"
@@ -1021,11 +1186,13 @@ function MetricTable({ comparison }: { comparison: Comparison | null }) {
   const rows: readonly MetricComparison[] = [...comparison.metrics]
     .sort((a, b) => (a.score ?? 999) - (b.score ?? 999))
     .slice(0, 6);
+  // 색은 **오버레이 토큰**을 쓴다. 감점의 --bad/--warn 을 쓰면 이 표가 "깎였다"고
+  // 말하는 셈인데, 교본과의 차이는 감점을 만들지 않는다(globals.css --off 주석).
   const color = (m: MetricComparison) =>
     m.band === "off"
-      ? "var(--bad)"
+      ? "var(--off)"
       : m.band === "warn"
-        ? "var(--warn)"
+        ? "var(--off-soft)"
         : m.band === "unreadable"
           ? "var(--hold)"
           : "var(--ok)";
@@ -1033,7 +1200,8 @@ function MetricTable({ comparison }: { comparison: Comparison | null }) {
     <>
       <p className={styles.hint} style={{ marginBottom: 8 }}>
         일치도 {comparison.match === null ? "재지 못함" : `${comparison.match.toFixed(0)} / 100`} ·
-        읽은 지표 {comparison.readableCount}개, 못 읽은 지표 {comparison.unreadableCount}개
+        읽은 지표 {comparison.readableCount}개, 못 읽은 지표 {comparison.unreadableCount}개 ·
+        <strong> 점수와 다른 값입니다(표시 전용).</strong>
       </p>
       <div className={styles.deltaList}>
         {rows.map((m) => (
@@ -1045,7 +1213,7 @@ function MetricTable({ comparison }: { comparison: Comparison | null }) {
                 : `${fmt(m.measured, m.unit)} / 교본 ${fmt(m.target, m.unit)}`}
             </span>
             <span className={styles.deltaDiff} style={{ color: color(m) }}>
-              {m.diff === null ? "—" : metricText(m).split(" ").at(-1)}
+              {m.diff === null ? "—" : metricDeltaText(m)}
             </span>
           </div>
         ))}
@@ -1056,37 +1224,6 @@ function MetricTable({ comparison }: { comparison: Comparison | null }) {
 
 function fmt(v: number, unit: "deg" | "ratio"): string {
   return unit === "deg" ? `${v.toFixed(1)}°` : `${v.toFixed(2)}·S`;
-}
-
-/**
- * 범례는 상시 노출한다.
- *
- * 화면에 빨강이 둘이기 때문이다 — **점선 빨강은 "읽지 못했다"(기존), 실선 빨강은
- * "교본과 어긋났다"(신규)**. 둘이 한 관절에 동시에 칠해지는 일은 구조적으로 없지만
- * (흐린 관절은 지표를 읽지 않아 `unreadable` 로 남고, `unreadable` 은 어떤 색도 받지 않는다),
- * 보는 사람에게는 범례가 있어야 그 약속이 보인다.
- */
-function Legend() {
-  const items: { color: string; dashed?: boolean; text: string }[] = [
-    { color: OVERLAY_COLORS.weak, dashed: true, text: "점선 = 읽지 못함(흐림)" },
-    { color: OVERLAY_COLORS.off, text: `실선 = ${ANGLE_BAND.warn}° 초과 어긋남` },
-    { color: OVERLAY_COLORS.warn, text: `${ANGLE_BAND.ok}~${ANGLE_BAND.warn}° 주의` },
-    { color: OVERLAY_COLORS.ghost, text: "교본" },
-  ];
-  return (
-    <div className={styles.legend}>
-      {items.map((it) => (
-        <span key={it.text} className={styles.legendItem}>
-          <span
-            className={`${styles.swatch} ${it.dashed ? styles.swatchDashed : ""}`}
-            style={{ borderTopColor: it.color }}
-            aria-hidden="true"
-          />
-          {it.text}
-        </span>
-      ))}
-    </div>
-  );
 }
 
 /* ── 시연 모드 먹이기 ──────────────────────────────────────────────── */
@@ -1112,12 +1249,13 @@ function feedDemo(st: LoopState, elapsedMs: number, limitMs: number, mode: Mode)
   if (mode !== "demo") return;
   const frames = st.demoFrames;
   if (!frames || frames.length === 0) return;
-  let guard = 0;
-  while (st.demoNextT <= elapsedMs && st.demoNextT <= limitMs && guard < 600) {
+  // 시각 계산은 `@/follow` 의 순수 함수가 한다 — 간격이 곧 H3(120ms)이고 결정성이라,
+  // 화면 안에 두면 테스트가 닿지 않는다.
+  const times = demoTickTimes(st.demoNextT, elapsedMs, limitMs, st.demoDt);
+  for (const t of times) {
     const f = frames[st.demoK % frames.length];
-    st.record.push({ t: st.demoNextT, image: f.image, world: f.world });
-    st.demoNextT += st.demoDt;
+    st.record.push({ t, image: f.image, world: f.world });
     st.demoK += 1;
-    guard += 1;
   }
+  if (times.length > 0) st.demoNextT = times[times.length - 1] + st.demoDt;
 }
