@@ -126,10 +126,20 @@ export function downloadBlob(fileName: string, blob: Blob, env: DownloadEnv = br
  * 공유가 되면 공유하고, 안 되면 내려받는다.
  *
  * 순서가 중요하다 — `share` 는 "있으면 더 좋은 것"이지 기본 경로가 아니다.
- * 사용자가 공유 시트를 취소해도 여기로 오는데, 그때 다시 내려받기를 띄우면
- * 취소한 사람에게 파일을 떠안기는 셈이라 **조용히 끝낸다**.
+ *
+ * **취소와 실패를 가른다.** 예전에는 `share` 가 던지면 무조건 `"shared"` 를 돌려줬고,
+ * 화면은 그때도 "공유 시트로 넘겼습니다"라고 적었다 — 아무 일도 일어나지 않았는데
+ * 성공했다고 말하는 경로다. `canShare` 가 true 인데 `share` 가 거부되는 조합
+ * (권한 정책·HTTPS 아님·인앱 브라우저)은 드물지 않다. 그래서
+ *
+ *   - 사용자가 시트를 닫았으면(`AbortError`) **아무것도 하지 않고** `"cancelled"`.
+ *     취소한 사람에게 파일을 떠안기지 않는다.
+ *   - 그 밖의 예외는 공유가 **실패한** 것이므로 내려받기로 떨어뜨리고 `"downloaded"`.
  */
-export async function shareOrDownloadCard(fileName: string, blob: Blob): Promise<"shared" | "downloaded"> {
+export async function shareOrDownloadCard(
+  fileName: string,
+  blob: Blob,
+): Promise<"shared" | "downloaded" | "cancelled"> {
   if (typeof navigator !== "undefined" && typeof navigator.canShare === "function") {
     try {
       const file = new File([blob], fileName, { type: "image/png" });
@@ -137,8 +147,9 @@ export async function shareOrDownloadCard(fileName: string, blob: Blob): Promise
         await navigator.share({ files: [file], title: "품새 판정 결과" });
         return "shared";
       }
-    } catch {
-      return "shared";
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") return "cancelled";
+      // 공유가 실패했다. 사용자는 카드를 원했으므로 내려받기로 떨어뜨린다.
     }
   }
   downloadBlob(fileName, blob);
