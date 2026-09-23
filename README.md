@@ -148,6 +148,7 @@ src/components/  화면 — 게이지, 타임라인, 3D 스켈레톤
 ## AI 코딩 툴 사용 방식
 
 **PRD를 먼저 쓰고 구현했습니다.** 말이 아니라 커밋 이력으로 확인할 수 있습니다.
+첫 커밋 [`f17c07e`](https://github.com/Min-heee/poomsae-judge/commit/f17c07e)은 `docs/PRD.md` 한 파일 144줄뿐입니다 — 클론하지 않아도 눌러서 보실 수 있습니다.
 
 ```bash
 git log --reverse --format='%h %s'      # 첫 커밋이 코드가 아니라 문서다
