@@ -14,6 +14,7 @@
  */
 
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ruleCoach } from "@/judge/coach";
 import { REQUIRED_VIEW } from "@/judge/constants";
@@ -39,8 +40,9 @@ import {
 } from "@/pose";
 import { JudgePanel } from "./JudgePanel";
 import { Notice } from "./Notice";
+import { OVERLAY_COLORS } from "./overlay";
 import { RuleSheet } from "./RuleSheet";
-import { Stage } from "./Stage";
+import { Stage, type OverlaySource } from "./Stage";
 import styles from "@/styles/studio.module.css";
 
 /**
@@ -77,6 +79,13 @@ export function Studio() {
    * "측면"이라고 단정해 넣던 예전 동작은 화면이 사실과 다른 말을 하는 것이었다.
    */
   const [webcamView, setWebcamView] = useState<CameraView>(REQUIRED_VIEW.stance);
+  /**
+   * 교본 오버레이. **기본은 꺼짐이다** — 켜지 않으면 이 화면은 예전과 똑같이 그려진다.
+   * 지도자가 "어디가 몇 도 어긋났는지"를 보고 싶을 때만 켠다.
+   */
+  const [overlayOn, setOverlayOn] = useState(false);
+  /** `@/follow` 를 토글이 켜질 때만 받아 온다. 받기 전에는 null 이고 화면은 예전 그대로다. */
+  const [follow, setFollow] = useState<typeof import("@/follow") | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const webcam = useWebcamPose(webcamMotion, webcamView);
@@ -125,6 +134,23 @@ export function Studio() {
     document.addEventListener("visibilitychange", onHidden);
     return () => document.removeEventListener("visibilitychange", onHidden);
   }, [mode, stopWebcam]);
+
+  /**
+   * 비교 코어는 **토글을 켤 때만** 받아 온다.
+   *
+   * three.js·MediaPipe 를 뗀 것과 같은 이유다 — 오버레이를 쓰지 않는 사람의 첫 화면에
+   * 기준 자세 생성기와 지표 표를 얹지 않는다.
+   */
+  useEffect(() => {
+    if (!overlayOn || follow !== null) return;
+    let alive = true;
+    void import("@/follow").then((m) => {
+      if (alive) setFollow(m);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [overlayOn, follow]);
 
   const selected = useMemo(
     () => samples.find((s) => s.id === selectedId) ?? samples[0] ?? null,
@@ -210,6 +236,24 @@ export function Studio() {
   const motion: MotionKind = activeSequence?.motion ?? (mode === "webcam" ? webcamMotion : "stance");
   const currentFrame = activeSequence?.frames[frameIndex]?.world ?? null;
 
+  /**
+   * 교본은 새 에셋이 아니라 **코드로 생성한 기준 자세**다(`src/samples/reference-frames.ts`).
+   * 어느 관절이 얼마나 어긋났는지는 비교 코어가 정한다 — 화면은 색만 칠한다.
+   */
+  const overlay = useMemo<OverlaySource | null>(() => {
+    if (!overlayOn || follow === null) return null;
+    const pose = follow.referencePose(motion === "stance" ? "juchum" : "ap-chagi-apex");
+    return {
+      compare: (frame) => {
+        const choice = follow.chooseOrientation(pose, frame.world);
+        return {
+          comparison: choice.comparison,
+          refWorld: choice.mirrored ? follow.mirrorFrame(pose.frame) : pose.frame,
+        };
+      },
+    };
+  }, [follow, motion, overlayOn]);
+
   // 각도는 관측값이 아니라 선언이다. 뱃지도 그렇게 적는다.
   const badge = activeSequence
     ? `${MOTION_LABEL[activeSequence.motion]} · ${VIEW_LABEL[activeSequence.view]} 전제 · ${
@@ -223,6 +267,9 @@ export function Studio() {
     <div className={styles.shell}>
       <header className={styles.header}>
         <h1 className={styles.title}>품새 판정기</h1>
+        <Link href="/game/" style={{ fontSize: 13, fontWeight: 600 }}>
+          따라하기 게임 →
+        </Link>
       </header>
       <p className={styles.subtitle}>
         브라우저에서 관절 33개를 읽어 태권도 기본 동작을 공개된 규칙으로 채점하고, 그 근거를 그대로
@@ -420,6 +467,31 @@ export function Studio() {
         </Notice>
       )}
 
+      {/* 교본 오버레이 — 기본은 꺼짐. 켜지 않으면 이 화면은 예전 그대로다. */}
+      <div className={styles.toolbar}>
+        <div className={styles.tabs} role="group" aria-label="교본 오버레이">
+          <button
+            type="button"
+            className={`${styles.tab} ${overlayOn ? styles.tabActive : ""}`}
+            aria-pressed={overlayOn}
+            onClick={() => setOverlayOn((v) => !v)}
+          >
+            교본 겹쳐 보기 {overlayOn ? "켬" : "끔"}
+          </button>
+        </div>
+        <span className={styles.tabHint}>
+          기준 자세를 내 스켈레톤 위에 겹치고, 교본과 어긋난 관절을 실선으로 칠해 차이를
+          숫자로 붙입니다. 표시 문턱(6°/15°)은 <strong>표시 전용</strong>이라 감점을 만들지
+          않습니다 — 점수는 지금처럼 판정 규칙에서만 나옵니다.
+        </span>
+      </div>
+
+      {overlayOn && (
+        <div className={styles.toolbar} style={{ gap: 16, justifyContent: "flex-start" }}>
+          <OverlayLegend />
+        </div>
+      )}
+
       <div className={styles.main}>
         <div style={{ display: "grid", gap: 16 }}>
           <Stage
@@ -429,6 +501,7 @@ export function Studio() {
             videoRef={mode === "webcam" ? webcam.videoRef : undefined}
             live={mode === "webcam" && webcam.status === "running"}
             mirror={mode === "webcam"}
+            overlay={overlay}
             badge={badge}
             alert={
               mode === "webcam" && webcam.status === "running" && webcam.noPose
@@ -463,6 +536,45 @@ export function Studio() {
           아니라고 보아 아예 채점하지 않습니다.
         </p>
       </footer>
+    </div>
+  );
+}
+
+/**
+ * 오버레이 범례. **켜져 있는 동안 상시 노출한다.**
+ *
+ * 화면에 빨강이 둘이기 때문이다 — **점선 빨강은 "읽지 못했다"(기존 `theme.weak`),
+ * 실선 빨강은 "교본과 어긋났다"(신규)**. 둘이 한 관절에 동시에 칠해지는 일은 구조적으로
+ * 없지만(흐린 관절은 각도를 계산하지 않으므로 어긋남 등급을 받을 수 없다), 보는 사람에게는
+ * 범례가 있어야 그 약속이 보인다.
+ */
+function OverlayLegend() {
+  const items: { color: string; dashed?: boolean; text: string }[] = [
+    { color: OVERLAY_COLORS.weak, dashed: true, text: "점선 = 읽지 못함(흐림)" },
+    { color: OVERLAY_COLORS.off, text: "실선 = 15° 초과 어긋남" },
+    { color: OVERLAY_COLORS.warn, text: "6~15° 주의" },
+    { color: OVERLAY_COLORS.ghost, text: "교본" },
+  ];
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 16px" }}>
+      {items.map((it) => (
+        <span
+          key={it.text}
+          className={styles.tabHint}
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}
+        >
+          <span
+            aria-hidden="true"
+            style={{
+              width: 22,
+              height: 0,
+              flex: "none",
+              borderTop: `3px ${it.dashed ? "dashed" : "solid"} ${it.color}`,
+            }}
+          />
+          {it.text}
+        </span>
+      ))}
     </div>
   );
 }
