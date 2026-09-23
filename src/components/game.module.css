@@ -347,37 +347,6 @@
   white-space: nowrap;
 }
 
-.legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 14px;
-  margin-top: 10px;
-  font-size: 11.5px;
-  color: var(--muted);
-  line-height: 1.5;
-}
-
-.legendItem {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-}
-
-.swatch {
-  display: inline-block;
-  width: 22px;
-  height: 0;
-  border-top-width: 3px;
-  border-top-style: solid;
-  border-radius: 2px;
-  flex: none;
-}
-
-.swatchDashed {
-  border-top-style: dashed;
-}
-
 /* ── 결과 화면 ────────────────────────────────────────────────────── */
 
 .result {

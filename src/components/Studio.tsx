@@ -40,7 +40,6 @@ import {
 } from "@/pose";
 import { JudgePanel } from "./JudgePanel";
 import { Notice } from "./Notice";
-import { OVERLAY_COLORS } from "./overlay";
 import { RuleSheet } from "./RuleSheet";
 import { Stage, type OverlaySource } from "./Stage";
 import styles from "@/styles/studio.module.css";
@@ -50,6 +49,15 @@ import styles from "@/styles/studio.module.css";
  * 먼저 떠야 한다. 따로 떼어 두면 초기 번들에서 three 가 빠진다.
  * (MediaPipe 도 같은 이유로 웹캠을 켤 때만 받는다.)
  */
+/**
+ * 범례도 오버레이를 켤 때만 받는다. 이 컴포넌트가 밴드 상수와 오버레이 색을 읽으므로
+ * 정적으로 두면 켜지 않는 사람의 첫 화면 번들에 그 둘이 딸려 온다.
+ */
+const OverlayLegend = dynamic(() => import("./OverlayLegend").then((m) => m.OverlayLegend), {
+  ssr: false,
+  loading: () => <span className={styles.tabHint}>범례를 불러오는 중…</span>,
+});
+
 const Skeleton3D = dynamic(() => import("./Skeleton3D").then((m) => m.Skeleton3D), {
   ssr: false,
   loading: () => (
@@ -480,15 +488,15 @@ export function Studio() {
           </button>
         </div>
         <span className={styles.tabHint}>
-          기준 자세를 내 스켈레톤 위에 겹치고, 교본과 어긋난 관절을 실선으로 칠해 차이를
-          숫자로 붙입니다. 표시 문턱(6°/15°)은 <strong>표시 전용</strong>이라 감점을 만들지
-          않습니다 — 점수는 지금처럼 판정 규칙에서만 나옵니다.
+          기준 자세를 내 스켈레톤 위에 겹치고, 교본과 어긋난 관절을 자홍 실선으로 칠해 차이를
+          숫자로 붙입니다. 표시 문턱은 <strong>표시 전용</strong>이라 감점을 만들지 않습니다 —
+          점수는 지금처럼 판정 규칙에서만 나옵니다. 경계값은 아래 범례에 있습니다.
         </span>
       </div>
 
       {overlayOn && (
         <div className={styles.toolbar} style={{ gap: 16, justifyContent: "flex-start" }}>
-          <OverlayLegend />
+          <OverlayLegend motion={motion} />
         </div>
       )}
 
@@ -536,45 +544,6 @@ export function Studio() {
           아니라고 보아 아예 채점하지 않습니다.
         </p>
       </footer>
-    </div>
-  );
-}
-
-/**
- * 오버레이 범례. **켜져 있는 동안 상시 노출한다.**
- *
- * 화면에 빨강이 둘이기 때문이다 — **점선 빨강은 "읽지 못했다"(기존 `theme.weak`),
- * 실선 빨강은 "교본과 어긋났다"(신규)**. 둘이 한 관절에 동시에 칠해지는 일은 구조적으로
- * 없지만(흐린 관절은 각도를 계산하지 않으므로 어긋남 등급을 받을 수 없다), 보는 사람에게는
- * 범례가 있어야 그 약속이 보인다.
- */
-function OverlayLegend() {
-  const items: { color: string; dashed?: boolean; text: string }[] = [
-    { color: OVERLAY_COLORS.weak, dashed: true, text: "점선 = 읽지 못함(흐림)" },
-    { color: OVERLAY_COLORS.off, text: "실선 = 15° 초과 어긋남" },
-    { color: OVERLAY_COLORS.warn, text: "6~15° 주의" },
-    { color: OVERLAY_COLORS.ghost, text: "교본" },
-  ];
-  return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 16px" }}>
-      {items.map((it) => (
-        <span
-          key={it.text}
-          className={styles.tabHint}
-          style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}
-        >
-          <span
-            aria-hidden="true"
-            style={{
-              width: 22,
-              height: 0,
-              flex: "none",
-              borderTop: `3px ${it.dashed ? "dashed" : "solid"} ${it.color}`,
-            }}
-          />
-          {it.text}
-        </span>
-      ))}
     </div>
   );
 }

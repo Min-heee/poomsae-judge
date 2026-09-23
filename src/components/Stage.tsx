@@ -1,11 +1,17 @@
 "use client";
 
-import { useEffect, useRef, type RefObject } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import type { Comparison } from "@/follow";
 import type { Landmark } from "@/judge/types";
 import { DARK_THEME, drawPose, type PoseFrame, type PoseSequence, type Playback } from "@/pose";
-import { drawOverlay, fitReferenceToFrame } from "./overlay";
 import styles from "@/styles/studio.module.css";
+
+/**
+ * 그리기 모듈은 **오버레이를 켤 때 받아 온다.** 정적으로 import 하면 켜지 않는 사람의
+ * 첫 화면 번들에도 들어간다 — 비교 코어를 동적 import 로 떼어 둔 노력이 되돌아온다.
+ * 타입만 먼저 알아 두고(지워지는 import), 실제 모듈은 아래 effect 가 받는다.
+ */
+type OverlayModule = typeof import("./overlay");
 
 /**
  * 교본 비교 한 벌. `Studio` 가 `@/follow` 를 동적으로 받아 와서 넘긴다 —
@@ -44,13 +50,14 @@ function paintOverlay(
   overlay: OverlaySource | null | undefined,
   aspect: number,
   mirror: boolean,
+  mod: OverlayModule | null,
 ): void {
-  if (!overlay || !frame) return;
+  if (!overlay || !frame || !mod) return;
   const got = overlay.compare(frame);
   if (!got) return;
-  drawOverlay(ctx, W, H, {
+  mod.drawOverlay(ctx, W, H, {
     mirror,
-    ghost: fitReferenceToFrame(frame, got.refWorld, aspect),
+    ghost: mod.fitReferenceToFrame(frame, got.refWorld, aspect),
     player: frame.image,
     comparison: got.comparison,
   });
@@ -88,6 +95,24 @@ export function Stage({
   const overlayRef = useRef({ overlay, aspect });
   overlayRef.current = { overlay, aspect };
 
+  /**
+   * 오버레이를 처음 켤 때 그리기 모듈을 받아 온다. 받아 오는 동안(한두 프레임)은
+   * 교본이 그려지지 않을 뿐, 판정 화면은 예전 그대로 돈다.
+   */
+  const [overlayMod, setOverlayMod] = useState<OverlayModule | null>(null);
+  const overlayModRef = useRef<OverlayModule | null>(null);
+  overlayModRef.current = overlayMod;
+  useEffect(() => {
+    if (!overlay || overlayModRef.current) return;
+    let alive = true;
+    void import("./overlay").then((m) => {
+      if (alive) setOverlayMod(m);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [overlay]);
+
   // 샘플 모드: 프레임이 바뀔 때만 다시 그린다.
   useEffect(() => {
     if (live) return;
@@ -96,8 +121,8 @@ export function Stage({
     if (!canvas || !ctx) return;
     setupCanvas(canvas, ctx);
     drawPose(ctx, W, H, { landmarks: frame?.image ?? null, theme: DARK_THEME, mirror });
-    paintOverlay(ctx, frame, overlay, aspect, mirror);
-  }, [frame, live, mirror, overlay, aspect]);
+    paintOverlay(ctx, frame, overlay, aspect, mirror, overlayMod);
+  }, [frame, live, mirror, overlay, aspect, overlayMod]);
 
   // 웹캠 모드: 영상이 매 프레임 바뀌므로 루프를 돈다.
   // `live` 는 카메라가 **실제로 켜져 있을 때만** 참이다. 웹캠 탭을 열어 두기만 해도
@@ -119,7 +144,7 @@ export function Stage({
           mirror,
         });
         const o = overlayRef.current;
-        paintOverlay(ctx, frameRef.current, o.overlay, o.aspect, mirror);
+        paintOverlay(ctx, frameRef.current, o.overlay, o.aspect, mirror, overlayModRef.current);
       }
       raf = requestAnimationFrame(loop);
     };

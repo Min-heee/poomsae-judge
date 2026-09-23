@@ -21,19 +21,29 @@
  * 4. **거울 안에서 글자를 그리지 않는다.** `scale(-1,1)` 안에서 `fillText` 하면 한글이
  *    좌우로 뒤집힌다. 교본은 거울 안, 라벨은 거울 밖에서 x만 손으로 되접는다.
  *
- * ### 색 규약 — 뿌리는 한 줄: **점선 = "읽지 못했다", 실선 = "읽었다"**
+ * ### 색 규약 — 뿌리는 두 줄
+ *
+ * **(ㄱ) 층이 다르면 색상 계열이 다르다.** 판정 층(감점·보류)은 빨강·노랑·보라를 쓰고,
+ * 이 층(교본과 얼마나 다른가)은 **자홍만** 쓴다. 처음에는 어긋남에 `--bad`(#f78787)를
+ * 그대로 썼는데, 그러면 10.0점 · 감점 0인 앞차기에 오버레이를 켠 순간 몸통이
+ * **감점색**으로 덮였다 — 한 색이 "깎였다"와 "교본과 다르다"를 동시에 말하게 된다.
+ * 두 말은 서로 무관하다. **교본과의 차이는 감점을 만들지 않는다.**
+ *
+ * **(ㄴ) 점선 = "읽지 못했다", 실선 = "읽었다".**
  *
  * | 무엇 | 표현 |
  * |---|---|
  * | 흐린 관절(visibility < 0.5) | **빨강 점선** — `src/pose/draw2d.ts` 의 기존 표현. **바꾸지 않는다.** |
  * | 교본 고스트 | `--brand-dim` 반투명 실선, 관절은 빈 원 |
- * | 어긋남(`off`) | **빨강 실선 + 굵은 링 + 숫자 라벨** |
- * | 주의(`warn`) | 노랑 실선 + 링 + 숫자 라벨 |
+ * | 어긋남(`off`) | **짙은 자홍 실선 + 굵은 링 + 숫자 라벨** |
+ * | 주의(`warn`) | 옅은 자홍 실선 + 링 + 숫자 라벨 |
  * | 맞음(`ok`)·비교 안 함(`none`) | 평소 색 |
  *
- * 두 빨강은 **한 관절에 동시에 칠해질 수 없다.** 흐린 관절은 지표를 읽지 않으므로
- * 비교 코어가 `unreadable` 로 두고, `unreadable` 은 여기서 아무 색도 받지 않는다 —
- * 표현이 다른 것에 기대지 않고 **구조가 보장하는 배타**다. 그래도 화면에는 범례를 상시 둔다.
+ * 빨강 점선과 자홍 실선은 **한 관절에 동시에 칠해질 수 없다.** 흐린 관절은 지표를
+ * 읽지 않으므로 비교 코어가 `unreadable` 로 두고, `unreadable` 은 여기서 아무 색도 받지
+ * 않는다 — 표현이 다른 것에 기대지 않고 **구조가 보장하는 배타**다. 색상 하나에만
+ * 기대지도 않는다: 어긋난 관절에는 링과 숫자 라벨이 함께 붙는다(색각 이상 대비).
+ * 그래도 화면에는 범례(`OverlayLegend`)를 상시 둔다.
  */
 
 import type { Comparison, MatchBand, MetricComparison } from "@/follow";
@@ -43,14 +53,19 @@ import type { PoseFrame } from "@/pose";
 
 /* ── 색 ──────────────────────────────────────────────────────────────── */
 
-/** globals.css 의 토큰과 같은 값. 캔버스는 CSS 변수를 못 읽으므로 여기 한 벌만 둔다. */
+/**
+ * globals.css 의 토큰과 같은 값. 캔버스는 CSS 변수를 못 읽으므로 여기 한 벌만 둔다.
+ *
+ * `off`·`warn` 은 **판정 층의 색이 아니다** — `--off`·`--off-soft` 이고, 감점의
+ * `--bad`(#f78787)·`--warn`(#f2c15b)과 일부러 다른 계열이다(위 색 규약 (ㄱ)).
+ */
 export const OVERLAY_COLORS = {
   /** --brand-dim */
   ghost: "#4e6fae",
-  /** --warn */
-  warn: "#f2c15b",
-  /** --bad. draw2d 의 weak(#ff7b72, 점선)과 다른 색이고 표현도 실선이다. */
-  off: "#f78787",
+  /** --off-soft. 주의 — 옅은 자홍. */
+  warn: "#ffb5e4",
+  /** --off. 어긋남 — 짙은 자홍. 감점색(--bad)도, 흐림색(#ff7b72)도 아니다. */
+  off: "#ff6ec7",
   /** draw2d 의 `theme.weak`. 범례에서 "점선 = 읽지 못함"을 보일 때만 쓴다. */
   weak: "#ff7b72",
   label: "#e9eff7",
@@ -63,13 +78,25 @@ export function bandColor(band: MatchBand): string | null {
   return null;
 }
 
-/** 지표 한 줄을 사람이 읽는 문장으로. 부호를 남긴다 — 덜 굽은 것과 더 굽은 것은 고치는 법이 반대다. */
-export function metricText(m: MetricComparison): string {
-  if (m.diff === null) return `${m.labelKo} 읽지 못함`;
+/**
+ * 차이 하나를 숫자 한 덩이로. `+12.0°` · `−0.41·S` · `읽지 못함`.
+ *
+ * 이것을 따로 내보내는 이유: 곁 표가 `metricText(m).split(" ").at(-1)` 로 문장에서
+ * 숫자를 도로 뜯어내고 있었다. 그러면 **표시 문자열의 형식이 사실상 API** 가 되어,
+ * 라벨에 단어 하나만 더해도 표에 엉뚱한 글자가 뜬다(타입도 테스트도 못 잡는다).
+ * 두 표현이 같은 출처에서 나오게 한다.
+ */
+export function metricDeltaText(m: MetricComparison): string {
+  if (m.diff === null) return "읽지 못함";
   const unit = m.unit === "deg" ? "°" : "·S";
   const sign = m.diff > 0 ? "+" : "−";
   const digits = m.unit === "deg" ? 1 : 2;
-  return `${m.labelKo} ${sign}${Math.abs(m.diff).toFixed(digits)}${unit}`;
+  return `${sign}${Math.abs(m.diff).toFixed(digits)}${unit}`;
+}
+
+/** 지표 한 줄을 사람이 읽는 문장으로. 부호를 남긴다 — 덜 굽은 것과 더 굽은 것은 고치는 법이 반대다. */
+export function metricText(m: MetricComparison): string {
+  return `${m.labelKo} ${metricDeltaText(m)}`;
 }
 
 /* ── 좌표 맞추기 ─────────────────────────────────────────────────────── */

@@ -1,0 +1,42 @@
+/* 교본 오버레이 범례. 판정 화면과 게임 화면이 같은 한 벌을 쓴다. */
+
+.wrap {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.swatch {
+  display: inline-block;
+  width: 22px;
+  height: 0;
+  border-top-width: 3px;
+  border-top-style: solid;
+  border-radius: 2px;
+  flex: none;
+}
+
+.swatchDashed {
+  border-top-style: dashed;
+}
+
+.note {
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--muted);
+}
