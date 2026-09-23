@@ -13,7 +13,13 @@ import { describe, expect, it } from "vitest";
 
 import { judgeSequence } from "../judge";
 import { FRONT_KICK, STANCE } from "../judge/constants";
-import type { Landmark, LandmarkSequence, TimedFrame } from "../judge/types";
+import type {
+  CriterionResult,
+  Judgement,
+  Landmark,
+  LandmarkSequence,
+  TimedFrame,
+} from "../judge/types";
 import { kickSequence, staticStanceSequence } from "../samples/fixtures";
 import { buildStanceFrame } from "../samples/rig";
 import { COURSES, ROUNDS_PER_COURSE, ROUND_LIMIT_SECONDS, course, courseDurationSeconds } from "./courses";
@@ -28,12 +34,46 @@ import {
   speedPoints,
   starsFor,
   summarizeCourse,
-  takeRecording,
+  DEMO_TICK_CAP,
+  demoTickTimes,
   type RoundInput,
   type RoundResult,
 } from "./game";
 
 const FPS = 30;
+
+/** `elapsed` 값을 일정 간격으로 만든다 — rAF 가 그 간격으로 돌았다는 뜻이다. */
+function ticksEvery(stepMs: number, untilMs: number): number[] {
+  const out: number[] = [];
+  for (let t = stepMs; t <= untilMs; t += stepMs) out.push(t);
+  return out;
+}
+
+/**
+ * 화면(`FollowGame` 의 `feedDemo`)과 **같은 방식으로** 시연 기록을 만든다.
+ * 시각은 `demoTickTimes` 가 정하고, 프레임은 샘플에서 차례로 꺼낸다.
+ */
+function demoRecord(
+  frames: readonly TimedFrame[],
+  ticks: readonly number[],
+  limitSeconds: number,
+  dtMs = 1000 / FPS,
+): TimedFrame[] {
+  const out: TimedFrame[] = [];
+  let nextT = 0;
+  let k = 0;
+  // 마지막 틱은 제한 시간 위에서 돈다 — 화면도 `elapsed >= limit` 인 틱에서 먹인 뒤
+  // 라운드를 끝낸다. 이것을 빼면 틱 간격이 다른 두 경우의 **끝나는 자리**가 달라진다.
+  for (const elapsed of [...ticks, limitSeconds * 1000]) {
+    const times = demoTickTimes(nextT, elapsed, limitSeconds * 1000, dtMs);
+    for (const t of times) {
+      out.push({ t, landmarks: frames[k % frames.length].landmarks });
+      k += 1;
+    }
+    if (times.length > 0) nextT = times[times.length - 1] + dtMs;
+  }
+  return out;
+}
 
 const STANDING = { feetGapRatio: 0.35, kneeAngleLeftDeg: 178, kneeAngleRightDeg: 178, torsoTiltDeg: 2 };
 const GOOD_JUCHUM = { feetGapRatio: 2.0, kneeAngleLeftDeg: 138, kneeAngleRightDeg: 138, torsoTiltDeg: 0 };
@@ -257,6 +297,23 @@ describe("점수 산식", () => {
     expect(baseScoreOf(j)).toBe(70);
   });
 
+  it("'재지 못함'(unmeasured) 항목도 분자와 분모에서 함께 빠진다", () => {
+    // B7 은 들기 단계를 못 잡으면 실제로 `unmeasured` 를 낸다(src/judge/frontKick.ts).
+    // 한쪽에서만 빼면 '못 쟀다'가 '만점'으로 셈해져 기본점이 올라간다 —
+    // 이 파일이 스스로 금지한 "한쪽에서만 빼기"다. 그래서 여기서 못을 박는다.
+    const withB7 = fakeKickJudgement("pass");
+    const withoutB7 = fakeKickJudgement("unmeasured");
+    const allMax = Object.entries(MAX_DEDUCTION_BY_CRITERION)
+      .filter(([id]) => id.startsWith("B"))
+      .reduce((sum, [, v]) => sum + v, 0);
+    // B4 에서 0.3 하나만 깎인 판정. B7 이 빠지면 분모가 그만큼 줄어 기본점이 **내려간다**.
+    expect(baseScoreOf(withB7)).toBe(Math.round(100 * (1 - 0.3 / allMax)));
+    expect(baseScoreOf(withoutB7)).toBe(
+      Math.round(100 * (1 - 0.3 / (allMax - MAX_DEDUCTION_BY_CRITERION.B7))),
+    );
+    expect(baseScoreOf(withoutB7) as number).toBeLessThan(baseScoreOf(withB7) as number);
+  });
+
   it("보류된 판정에는 기본점이 없다 — 0점이 아니다", () => {
     const j = judgeSequence(standingSequence());
     expect(j.status).toBe("withheld");
@@ -383,30 +440,94 @@ describe("결정성", () => {
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
   });
 
-  it("시연 모드를 몇 번 눌러도 같은 결과다", () => {
+  it("시연 모드는 틱이 고르든 밀리든 같은 기록을 만든다", () => {
     const seq = staticStanceSequence({ ...jc(GOOD_JUCHUM), frames: 200 });
-    const first = takeRecording(seq.frames, 0, 6);
-    const again = takeRecording(seq.frames, 0, 6);
-    expect(JSON.stringify(first)).toBe(JSON.stringify(again));
-    expect(JSON.stringify(judgeRound(stanceRound(first)))).toBe(
-      JSON.stringify(judgeRound(stanceRound(again))),
+    // 60fps 로 고르게 돈 틱과, 210ms 씩 밀린 틱. 벽시계는 다르지만 예정 시각은 같다.
+    const smooth = demoRecord(seq.frames, ticksEvery(16.7, 6000), 6);
+    const janky = demoRecord(seq.frames, ticksEvery(210, 6000), 6);
+    expect(smooth.map((f) => f.t)).toEqual(janky.map((f) => f.t));
+    expect(JSON.stringify(judgeRound(stanceRound(smooth)))).toBe(
+      JSON.stringify(judgeRound(stanceRound(janky))),
     );
   });
 });
 
-describe("기록기", () => {
-  it("시작 신호 기준으로 시간을 다시 센다", () => {
-    const seq = staticStanceSequence({ frames: 200 });
-    const rec = takeRecording(seq.frames, 1000, 4);
-    expect(rec[0].t).toBe(0);
-    expect(rec[rec.length - 1].t).toBeLessThanOrEqual(4000);
-    expect(rec.length).toBeGreaterThan(100);
+/**
+ * 앞차기 판정 하나를 손으로 만든다 — B4 에서 0.3 만 깎이고, B7 의 등급만 바꿔 끼운다.
+ * 판정 코어를 부르지 않는 이유: `unmeasured` 를 내는 입력(들기 단계가 잘린 영상)을
+ * 합성 샘플로 만드는 것보다, 분모 계산 자체를 직접 겨누는 편이 시험이 무엇을 보는지 분명하다.
+ */
+function fakeKickJudgement(b7Grade: "pass" | "unmeasured"): Judgement {
+  const item = (id: string, grade: "pass" | "major" | "unmeasured", deduction: number): CriterionResult => ({
+    id,
+    title: id,
+    rule: id,
+    measured: null,
+    unit: "none",
+    boundaries: [],
+    grade,
+    deduction,
+    note: "",
+    atFrame: null,
+    atTimeMs: null,
+  });
+  const ids = ["B1", "B2", "B3", "B5", "B6"];
+  return {
+    sequenceId: "fake-kick",
+    motion: "frontKick",
+    status: "judged",
+    score: 9.7,
+    maxScore: 10,
+    totalDeduction: 0.3,
+    criteria: [
+      ...ids.map((id) => item(id, "pass", 0)),
+      item("B4", "major", 0.3),
+      item("B7", b7Grade, 0),
+    ],
+    notMeasured: [],
+    withheld: [],
+    frameStats: {
+      total: 60,
+      valid: 60,
+      invalid: 0,
+      invalidRatio: 0,
+      interpolated: 0,
+      judgedFrom: null,
+      judgedTo: null,
+      judgedDurationMs: null,
+    },
+    rulesVersion: "test",
+  };
+}
+
+describe("시연 모드의 시계", () => {
+  it("프레임 간격이 샘플의 간격 그대로다 — H3(120ms)에 걸릴 경로가 없다", () => {
+    const dt = 1000 / FPS;
+    const times = demoTickTimes(0, 1000, 6000, dt);
+    expect(times.length).toBeGreaterThan(20);
+    for (let i = 1; i < times.length; i++) {
+      expect(times[i] - times[i - 1]).toBeCloseTo(dt, 9);
+      expect(times[i] - times[i - 1]).toBeLessThan(120);
+    }
   });
 
-  it("제한 시간 밖의 프레임을 버린다", () => {
-    const seq = staticStanceSequence({ frames: 300 });
-    const rec = takeRecording(seq.frames, 0, 2);
-    expect(rec.every((f) => f.t <= 2000)).toBe(true);
+  it("제한 시간을 넘는 시각은 내보내지 않는다", () => {
+    const times = demoTickTimes(0, 9000, 2000, 1000 / FPS);
+    expect(times.every((t) => t <= 2000)).toBe(true);
+  });
+
+  it("아직 때가 아니면 아무것도 내보내지 않는다", () => {
+    expect(demoTickTimes(500, 400, 6000, 1000 / FPS)).toEqual([]);
+  });
+
+  it("시계가 크게 튀어도 한 틱의 양에 상한이 있다", () => {
+    const times = demoTickTimes(0, 1e9, 1e9, 1000 / FPS);
+    expect(times.length).toBe(DEMO_TICK_CAP);
+  });
+
+  it("간격이 0이거나 음수면 아무것도 내보내지 않는다 — 무한 루프가 되는 대신", () => {
+    expect(demoTickTimes(0, 1000, 6000, 0)).toEqual([]);
+    expect(demoTickTimes(0, 1000, 6000, -5)).toEqual([]);
   });
 });
 

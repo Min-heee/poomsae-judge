@@ -230,6 +230,16 @@ export function useWebcamPose(motion: MotionKind, view: CameraView): WebcamPose 
               frames: frames.map((f) => ({ ...f, t: f.t - base })),
               origin: "webcam",
               originNote: `웹캠 최근 ${(WINDOW_MS / 1000).toFixed(0)}초 · 카메라 각도는 사용자가 선언한 값입니다`,
+              /**
+               * 이 배치의 t = 0 이 **실제로 언제였는지**를 함께 싣는다.
+               *
+               * 프레임의 t 는 `startedAtRef` 기준이고 여기서 `base` 만큼 다시 밀었으므로,
+               * t = 0 의 벽시계는 `startedAt + base` 다. 받는 쪽이 이 값을 쓰면 프레임
+               * 시각을 자기 시계로 정확히 옮길 수 있다. 이 값이 없으면 받는 쪽은 "배치를
+               * 받은 시각"으로 되짚게 되고, 그 시각은 프레임이 찍힌 시각보다 배치 지연만큼
+               * 늦어서 **시작 신호 직전의 프레임이 시작 이후로 딸려 들어간다**.
+               */
+              epochMs: startedAtRef.current + base,
             });
           }
         } else {

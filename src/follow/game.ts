@@ -475,28 +475,41 @@ export function summarizeCourse(rounds: readonly RoundResult[]): CourseSummary {
 }
 
 // ---------------------------------------------------------------------------
-// 기록기 — 시연 모드가 공개 샘플을 플레이어 입력 자리에 흘려보낼 때 쓴다
+// 시연 모드의 시계 — 합성 샘플을 플레이어 입력 자리에 흘려보낼 때 쓴다
 // ---------------------------------------------------------------------------
 
+/** 한 틱에 흘려보낼 수 있는 최대 프레임 수. 시계가 크게 튀어도 루프가 멈추지 않게 한다. */
+export const DEMO_TICK_CAP = 600;
+
 /**
- * 시퀀스의 한 토막을 **시작 신호 기준 기록**으로 바꾼다.
+ * 시연 모드에서 **이번 틱에 흘려보낼 프레임의 시각들**(시작 신호 기준 ms).
  *
- * 시연 모드는 웹캠 자리에 합성 샘플을 흘려보낼 뿐, 루프·판정·오버레이·카드는
- * 웹캠 모드와 **완전히 같은 코드**를 지난다. 그 "흘려보내기"가 이 함수다 —
- * t를 시작 신호 기준으로 다시 세고, 제한 시간 밖의 프레임을 버린다.
+ * 붙이는 시각은 실제 시각이 아니라 **예정된 시각**이다. 브라우저가 한 번 밀려도 프레임
+ * 간격이 33ms 로 유지되므로 H3(인접 120ms)에 걸리지 않고, 무엇보다 **몇 번을 눌러도
+ * 같은 결과**가 나온다 — 시연 모드의 결정성이 이 한 줄에서 나온다.
+ *
+ * 화면이 아니라 여기 있는 이유: 간격이 곧 H3이고 H3은 점수를 사라지게 하므로,
+ * 이 계산은 테스트가 닿는 자리에 있어야 한다. 프레임을 고르는 일(어느 샘플의 몇 번째
+ * 프레임인가)은 화면이 하고, 이 함수는 **시각만** 정한다.
+ *
+ * @param nextT     다음에 내보낼 예정 시각(ms)
+ * @param elapsedMs 맞추기 단계가 시작된 뒤 흐른 시간(ms)
+ * @param limitMs   이 라운드의 제한 시간(ms). 넘는 시각은 내보내지 않는다.
+ * @param dtMs      샘플의 프레임 간격(ms)
  */
-export function takeRecording(
-  frames: readonly TimedFrame[],
-  startMs: number,
-  limitSeconds: number,
-): TimedFrame[] {
-  const limitMs = Math.round(limitSeconds * 1000);
-  const out: TimedFrame[] = [];
-  for (const f of frames) {
-    const t = f.t - startMs;
-    if (t < 0) continue;
-    if (t > limitMs) break;
-    out.push({ t: Math.round(t * 10) / 10, landmarks: f.landmarks });
+export function demoTickTimes(
+  nextT: number,
+  elapsedMs: number,
+  limitMs: number,
+  dtMs: number,
+  cap: number = DEMO_TICK_CAP,
+): number[] {
+  const out: number[] = [];
+  if (!(dtMs > 0) || !Number.isFinite(nextT)) return out;
+  let t = nextT;
+  while (t <= elapsedMs && t <= limitMs && out.length < cap) {
+    out.push(t);
+    t += dtMs;
   }
   return out;
 }

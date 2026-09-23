@@ -45,6 +45,7 @@ export {
 export { METRIC_SPECS, FRAME_ANCHORS, weightSum, sideLabel } from "./metrics";
 
 export {
+  DEMO_TICK_CAP,
   MAX_DEDUCTION_BY_CRITERION,
   MAX_COMBO,
   MAX_SPEED_POINTS,
@@ -55,12 +56,12 @@ export {
   WINDOW_STEP_MS,
   baseScoreOf,
   comboMultiplier,
+  demoTickTimes,
   judgeRound,
   maxDeductionFor,
   speedPoints,
   starsFor,
   summarizeCourse,
-  takeRecording,
   type AdoptedWindow,
   type CourseSummary,
   type RoundInput,

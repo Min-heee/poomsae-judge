@@ -400,6 +400,16 @@ describe("밴드와 항목 점수", () => {
     expect(itemScore(-zeroAt - 100, ANGLE_BAND)).toBe(0);
   });
 
+  it("어긋남 구간의 기울기를 숫자로 못 박는다", () => {
+    // 위 시험은 0에 닿는 지점을 OFF_ZERO_MULTIPLE 로 **계산**해 자기를 참조한다.
+    // 그래서 그 상수를 2에서 3으로 바꿔도 전부 통과했다(변이 실험에서 살아남았다).
+    // 여기서는 값을 손으로 적어 그 길을 막는다 — 주의 문턱의 1.5배에서 20점이다.
+    // 이 점수가 가중평균되어 화면의 '일치도 xx / 100' 이 된다.
+    expect(itemScore(ANGLE_BAND.warn * 1.5, ANGLE_BAND)).toBeCloseTo(20, 9);
+    expect(itemScore(LENGTH_BAND.warn * 1.5, LENGTH_BAND)).toBeCloseTo(20, 9);
+    expect(OFF_ZERO_MULTIPLE).toBe(2);
+  });
+
   it("점수가 단조 감소한다", () => {
     let prev = 101;
     for (let d = 0; d <= 40; d += 0.25) {
