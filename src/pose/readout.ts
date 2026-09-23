@@ -24,6 +24,7 @@ import {
   torsoTilt,
 } from "@/judge/coords";
 import { ESSENTIAL_LANDMARKS, LANDMARK_NAMES_KO, LEFT_LEG, RIGHT_LEG } from "@/judge/landmarks";
+import { isEngagedStancePose } from "@/judge/stance";
 import type { CriterionResult, Grade, LandmarkFrame, MeasureUnit } from "@/judge/types";
 import type { PoseSequence } from "./types";
 
@@ -87,13 +88,22 @@ export interface FrameReadout {
   kickingLeg?: "left" | "right";
 }
 
-/** 주춤서기 자세를 "취하고 있는" 프레임인가 (구간 탐지용, 채점 아님). */
+/**
+ * 주춤서기 자세를 "취하고 있는" 프레임인가 (구간 탐지용, 채점 아님).
+ *
+ * 판단 자체는 판정 코어의 `isEngagedStancePose` 가 한다. 조건을 여기 한 번 더 적어
+ * 두면, 판정 쪽 무릎 조건을 고치면서 이쪽을 잊는 날 화면의 "유지 n초"와 판정이 세는
+ * 구간이 **말없이** 어긋난다. 그때 둘 중 어느 쪽이 맞는지 화면만 보고는 알 수 없다.
+ * (H7을 넣으며 판정이 '더 굽은 쪽'으로 바뀐 것이 정확히 그 순간이었다.)
+ */
 function isEngagedStance(f: LandmarkFrame): boolean {
   const S = shoulderWidth(f);
   if (!Number.isFinite(S) || S < 1e-6) return false;
-  const gap = ankleGapX(f) / S;
-  const worstKnee = Math.max(kneeAngle(f, LEFT_LEG), kneeAngle(f, RIGHT_LEG));
-  return gap >= STANCE.engagedFeetGapMin && worstKnee <= STANCE.engagedKneeAngleMax;
+  return isEngagedStancePose(
+    ankleGapX(f) / S,
+    kneeAngle(f, LEFT_LEG),
+    kneeAngle(f, RIGHT_LEG),
+  );
 }
 
 function stanceReadout(seq: PoseSequence, i: number): FrameReadout {

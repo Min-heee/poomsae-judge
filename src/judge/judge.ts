@@ -168,23 +168,34 @@ export function judgeSequence(sequence: LandmarkSequence): Judgement {
 
       // --- H7 : 주춤서기로 볼 멈춘 구간이 없다 --------------------------------
       // window.settled 가 false면 구간 탐지가 "유효 프레임이 이어지는 가장 긴 구간"으로
-      // 물러섰다는 뜻이다(stance.ts findStanceWindow). 즉 주춤서기라고 볼 프레임이
-      // 하나도 없었다. 그런데 A3(좌우 대칭)·A4(상체 수직)는 가만히 서 있기만 해도
+      // 물러섰다는 뜻이다(stance.ts findStanceWindow). 즉 주춤서기로 볼 구간이
+      // 없었다. 그런데 A3(좌우 대칭)·A4(상체 수직)는 가만히 서 있기만 해도
       // 통과하므로, 그대로 두면 차렷 자세가 감점 몇 개만 붙은 '판정 완료'로 나온다.
       // **나쁜 자세와 자세 아님은 다른 결과다.** 후자에는 점수를 만들지 않는다.
       //
-      // 문턱은 가장 좁게 잡았다 — 주춤서기로 볼 프레임이 하나라도 있으면 채점하고,
-      // 그 구간이 짧다는 사실은 A5가 감점으로 말한다. 여기서 길이까지 요구하면
-      // A5가 이미 하는 말을 보류가 다시 하게 된다.
+      // 문턱은 '자세 아님'에만 닿도록 좁게 잡았다 — 한쪽이라도 무릎을 굽혀 발을 벌린
+      // 채 settledMinSeconds(0.2초)만 멈추면 채점한다. 그 구간이 A5의 기준(0.8초)보다
+      // 짧다는 사실은 A5가 감점으로 말하고, 자세가 얼마나 나쁜지는 A1~A4가 말한다.
+      // 여기서 A5의 0.8초까지 요구하면 감점이 해야 할 말을 보류가 다시 하게 된다.
       if (!outcome.window.settled) {
         stanceNotSettled = true;
+
+        // 구간을 못 찾았으면 판정 구간도 없다. 대체 구간(유효 프레임 최장 구간)을
+        // 그대로 두면 화면이 "구간이 없다"고 말하면서 그 구간의 프레임 번호를
+        // 같이 찍는다. 구간을 못 찾은 H2 경로와 같은 모양(null → 화면은 '—')으로 둔다.
+        // 감점 줄의 '프레임 n으로 이동'은 항목이 따로 들고 있으므로 영향받지 않는다.
+        judgedFrom = null;
+        judgedTo = null;
+        judgedDurationMs = null;
+
         withheld.push({
           code: "H7",
           message:
-            `주춤서기로 볼 멈춘 구간이 없다. 양쪽 무릎이 ${STANCE.engagedKneeAngleMax}° 이하로 굽고, ` +
+            `주춤서기로 볼 멈춘 구간이 없다. 적어도 한쪽 무릎이 ${STANCE.engagedKneeAngleMax}° 이하로 굽고, ` +
             `발 간격이 어깨 너비의 ${STANCE.engagedFeetGapMin}배 이상이며, 엉덩이가 ` +
-            `${STANCE.settleSpeedMaxMps}m/s 이하로 멈춰 있는 프레임이 하나도 없었다. ` +
-            `그냥 서 있는 것과 주춤서기를 가를 수 없으므로 채점하지 않는다. ` +
+            `${STANCE.settleSpeedMaxMps}m/s 이하로 멈춰 있는 구간이 ` +
+            `${STANCE.settledMinSeconds}초 이상 이어진 적이 한 번도 없었다. ` +
+            `채점할 자세를 고르지 못했으므로 점수를 만들지 않는다. ` +
             `무릎을 굽혀 발을 벌린 자세로 ${STANCE.minHoldSeconds}초 이상 멈춘 뒤 다시 재면 채점한다.`,
         });
       }

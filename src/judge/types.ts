@@ -137,7 +137,9 @@ export interface Judgement {
   notMeasured: readonly NotMeasured[];
   /**
    * 보류 사유와 관측 경고. H1은 "흐린 프레임이 있었다"는 경고라 총점을 막지 않고,
-   * H2·H3·H5·H6이 있으면 전체 보류다. 실제 보류 여부는 status가 말한다.
+   * **H2·H3·H5·H6·H7**이 있으면 전체 보류다. H4는 그 항목만 총점에서 빼고,
+   * 그렇게 빠진 항목이 H5의 기준만큼 쌓이면 그때 전체 보류로 올라간다.
+   * 실제 보류 여부는 이 주석이 아니라 status가 말한다 — 판단은 judge.ts 한 곳에 있다.
    */
   withheld: readonly WithholdNote[];
   frameStats: FrameStats;

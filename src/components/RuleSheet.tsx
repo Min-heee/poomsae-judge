@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { HOLD_RULES, RULE_TABLE, type MotionKind } from "@/pose";
+import { holdRulesFor, RULE_TABLE, type MotionKind } from "@/pose";
 import styles from "@/styles/studio.module.css";
 
 /**
@@ -14,6 +14,9 @@ import styles from "@/styles/studio.module.css";
 export function RuleSheet({ motion }: { motion: MotionKind }) {
   const [open, setOpen] = useState(false);
   const table = RULE_TABLE[motion];
+  // 보류 규칙도 이 동작에 걸리는 것만 띄운다 — 앞차기 표에 주춤서기 전용 조건(H7)을
+  // 같이 늘어놓으면, 규칙 표가 이 동작에서 일어날 수 없는 일을 약속하게 된다.
+  const holdRules = holdRulesFor(motion);
 
   return (
     <section className={styles.card} aria-label="규칙 표">
@@ -60,7 +63,7 @@ export function RuleSheet({ motion }: { motion: MotionKind }) {
 
           <div className={styles.holdList}>
             <strong>판정 보류 조건</strong>
-            {HOLD_RULES.map((h) => (
+            {holdRules.map((h) => (
               <div key={h.code}>
                 <span className={styles.holdCode}>{h.code}</span>
                 {h.text}

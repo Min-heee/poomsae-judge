@@ -49,6 +49,7 @@ export {
   GRADE_TONE,
   HOLD_RULES,
   RULE_TABLE,
+  holdRulesFor,
   axisRatio,
   euroRo,
   formatMeasure,
@@ -57,6 +58,7 @@ export {
   unitSuffix,
   type GaugeModel,
   type GradeTone,
+  type HoldRule,
   type RuleRow,
 } from "./display";
 

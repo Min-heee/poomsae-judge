@@ -71,6 +71,19 @@ describe("A2 무릎 굽힘", () => {
     expect(grade("A2", { kneeLeftDeg: 146, kneeRightDeg: 145 })).toBe("withheld");
     expect(grade("A2", { kneeLeftDeg: 159, kneeRightDeg: 159 })).toBe("withheld");
   });
+
+  it("0.3 감점 밴드(> 160°)에 실제로 도달할 수 있다 — 구간 탐지가 막지 않는다", () => {
+    // 규칙 표가 화면에 띄우는 칸이 코드로는 닿을 수 없는 칸이면, 그 표는 앱이
+    // 내지 않는 결과를 약속하는 것이다. 구간 탐지의 무릎 문턱(160°)과 이 항목의
+    // 경계(160°)는 값이 같지만 **재는 대상이 다르다** — 탐지는 더 굽은 쪽,
+    // 채점은 덜 굽은 쪽. 그래서 둘 사이에 도달 불가능한 칸이 생기지 않는다.
+    const c = criterion("A2", { kneeLeftDeg: 160, kneeRightDeg: 163 });
+    expect(c.grade).toBe("major");
+    expect(c.deduction).toBe(0.3);
+    expect(judgeSequence(
+      staticStanceSequence({ frames: 40, kneeLeftDeg: 160, kneeRightDeg: 163 }),
+    ).status).toBe("judged");
+  });
 });
 
 describe("A3 좌우 대칭", () => {
@@ -172,7 +185,7 @@ describe("A5 유지·흔들림", () => {
 
 /**
  * 차렷 — 발을 모으고 무릎을 편 채 가만히 서 있는 자세.
- * 구간 탐지 조건(무릎 ≤ 160°, 발 간격 ≥ 1.2·S) 중 둘을 동시에 어긴다.
+ * 구간 탐지 조건(더 굽은 쪽 무릎 ≤ 160°, 발 간격 ≥ 1.2·S) 중 둘을 동시에 어긴다.
  */
 const STANDING_STILL: StanceFixtureOptions = {
   gapRatio: 0.35,
@@ -181,14 +194,17 @@ const STANDING_STILL: StanceFixtureOptions = {
   torsoTiltDeg: 2,
 };
 
-/** 차렷으로 선 시퀀스에서 한 프레임만 제대로 된 주춤서기로 바꾼다. 타임스탬프는 그대로다. */
-function standingWithOneStanceFrame(index: number, frames = 40): LandmarkSequence {
+/**
+ * 차렷으로 선 시퀀스에서 [from, to] 구간만 제대로 된 주춤서기로 바꾼다.
+ * 타임스탬프는 그대로다 — 길이만 달라진 같은 입력이어야 문턱을 잴 수 있다.
+ */
+function standingWithStanceFrames(from: number, to: number, frames = 40): LandmarkSequence {
   const standing = staticStanceSequence({ ...STANDING_STILL, frames });
   const stance = staticStanceSequence({ frames });
   return {
     ...standing,
     frames: standing.frames.map((f, i) =>
-      i === index ? { t: f.t, landmarks: stance.frames[i].landmarks } : f,
+      i >= from && i <= to ? { t: f.t, landmarks: stance.frames[i].landmarks } : f,
     ),
   };
 }
@@ -208,6 +224,7 @@ describe("H7 주춤서기로 볼 멈춘 구간", () => {
     const h7 = j.withheld.find((w) => w.code === "H7");
     expect(h7?.message).toContain(`${STANCE.engagedKneeAngleMax}°`);
     expect(h7?.message).toContain(`${STANCE.engagedFeetGapMin}배`);
+    expect(h7?.message).toContain(`${STANCE.settledMinSeconds}초`);
     expect(h7?.message).toContain(`${STANCE.minHoldSeconds}초`);
   });
 
@@ -228,18 +245,32 @@ describe("H7 주춤서기로 볼 멈춘 구간", () => {
     expect(j.withheld).toEqual([]);
   });
 
-  it("문턱은 한 프레임이다 — 주춤서기로 볼 프레임이 하나라도 있으면 채점한다", () => {
-    // 같은 40프레임인데 19번 한 프레임만 주춤서기다. 그 한 프레임이 있으면 H7은 닫히지 않고,
-    // "구간이 짧다"는 사실은 A5가 0.1 감점으로 말한다. 보류는 '자세 아님'에만 쓴다.
-    const judged = judgeSequence(standingWithOneStanceFrame(19));
+  /**
+   * 게이트의 폭을 고정하는 핀 세 개.
+   *
+   * 이 셋을 지우면 H7은 여전히 '동작'하지만 문턱이 소리 없이 넓어지거나 좁아진다.
+   * 샘플 7종의 골든 표는 이 축 위에 있지 않아서 아무것도 잡지 못한다 — 실제로
+   * 게이트를 넓혀 보고 좁혀 보며 확인했다.
+   */
+  it("문턱은 0.2초다 — 스치고 지나간 자세로는 점수가 열리지 않는다", () => {
+    // 40프레임 내내 차렷인데 13프레임(15~27)만 주춤서기다. 속도 조건이 이음매
+    // 몇 프레임을 깎아 멈춘 구간은 18~24 = 정확히 0.200초. 문턱 이상이므로 채점하고,
+    // "0.8초를 못 채웠다"는 사실은 A5가 0.1 감점으로 말한다. 보류는 '자세 아님'에만 쓴다.
+    const judged = judgeSequence(standingWithStanceFrames(15, 27));
     expect(judged.status).toBe("judged");
+    expect(judged.frameStats.judgedDurationMs).toBe(STANCE.settledMinSeconds * 1000);
     expect(judged.withheld.map((w) => w.code)).not.toContain("H7");
     expect(judged.criteria.find((c) => c.id === "A5")?.grade).toBe("minor");
 
-    // 그 한 프레임을 되돌리면(= 전부 차렷) 같은 길이·같은 fps인데 보류로 넘어간다.
-    const withheld = judgeSequence(staticStanceSequence({ ...STANDING_STILL, frames: 40 }));
-    expect(withheld.status).toBe("withheld");
-    expect(withheld.withheld.map((w) => w.code)).toContain("H7");
+    // 같은 입력에서 스친 구간만 짧게 하면(11프레임) 멈춘 구간이 문턱에 못 미쳐 보류다.
+    const tooShort = judgeSequence(standingWithStanceFrames(15, 25));
+    expect(tooShort.status).toBe("withheld");
+    expect(tooShort.withheld.map((w) => w.code)).toContain("H7");
+
+    // 한 프레임만 스친 경우 — 예전에는 이것으로 점수가 열렸다.
+    const oneFrame = judgeSequence(standingWithStanceFrames(19, 19));
+    expect(oneFrame.status).toBe("withheld");
+    expect(oneFrame.withheld.map((w) => w.code)).toContain("H7");
   });
 
   it("무릎만 편 채 발을 벌려도 주춤서기가 아니다", () => {
@@ -248,6 +279,39 @@ describe("H7 주춤서기로 볼 멈춘 구간", () => {
     );
     expect(j.status).toBe("withheld");
     expect(j.withheld.map((w) => w.code)).toContain("H7");
+  });
+
+  it("무릎을 굽혀도 발을 모으면 주춤서기가 아니다 — 발 간격 조건을 고정한다", () => {
+    // 무릎은 합격 범위(138/140)인데 발만 모았다. 게이트에서 발 간격 조건을 빼면
+    // 이 입력이 채점으로 넘어간다(A1 0.3 감점만 붙은 9.x점). 차렷 픽스처는 무릎
+    // 조건만으로도 걸리므로 이 축을 잡는 것은 이 테스트뿐이다.
+    const j = judgeSequence(
+      staticStanceSequence({ frames: 40, gapRatio: 0.35, kneeLeftDeg: 138, kneeRightDeg: 140 }),
+    );
+    expect(j.status).toBe("withheld");
+    expect(j.withheld.map((w) => w.code)).toContain("H7");
+  });
+
+  it("한쪽만 굽힌 주춤서기는 '자세 아님'이 아니라 감점이다", () => {
+    // 무릎 120°/165°. 한쪽 무릎이 120°인 사람은 서 있는 것이 아니다.
+    // 게이트를 '양쪽 무릎'으로 걸면 이 자세가 보류로 넘어가면서, 정확히 이 자세를
+    // 감점하려고 만든 A2(덜 굽은 쪽)·A3(좌우 차)가 말할 기회를 잃는다.
+    const j = judgeSequence(
+      staticStanceSequence({ frames: 40, gapRatio: 2.0, kneeLeftDeg: 120, kneeRightDeg: 165 }),
+    );
+    expect(j.status).toBe("judged");
+    expect(j.withheld.map((w) => w.code)).not.toContain("H7");
+    expect(j.criteria.find((c) => c.id === "A2")?.grade).toBe("major");
+    expect(j.criteria.find((c) => c.id === "A3")?.grade).toBe("major");
+  });
+
+  it("보류하면 판정 구간을 비운다 — 구간이 없다면서 프레임 번호를 찍지 않는다", () => {
+    const j = judgeSequence(staticStanceSequence({ ...STANDING_STILL, frames: 40 }));
+    expect(j.frameStats.judgedFrom).toBeNull();
+    expect(j.frameStats.judgedTo).toBeNull();
+    expect(j.frameStats.judgedDurationMs).toBeNull();
+    // 그래도 어느 프레임을 보고 한 말인지는 항목이 들고 있다.
+    expect(j.criteria.find((c) => c.id === "A1")?.atFrame).not.toBeNull();
   });
 
   it("보류여도 감점 항목은 그대로 남는다 — 왜 보류인지 읽을 수 있어야 한다", () => {

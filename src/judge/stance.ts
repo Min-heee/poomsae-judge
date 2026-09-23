@@ -107,6 +107,27 @@ export interface StanceWindow {
 }
 
 /**
+ * 이 프레임이 주춤서기를 "취하고 있는가". 구간 탐지용이고 채점이 아니다.
+ *
+ * 판정 코어(findStanceWindow)와 화면의 실시간 읽기(src/pose/readout.ts)가 **같은 이
+ * 함수**를 부른다. 두 벌로 두면 화면이 "유지 2.1초"라고 세는 프레임을 판정은 세지
+ * 않는 일이 생기고, 그때 화면과 판정 중 어느 쪽이 맞는지 아무도 말할 수 없다.
+ *
+ * 무릎은 **더 굽은 쪽**으로 본다(이유는 constants.ts engagedKneeAngleMax 주석).
+ * 여기서 보지 않는 것이 하나 있다 — 자세가 멈췄는가. 그건 시계열이 있어야 재고,
+ * findStanceWindow가 속도 문턱으로 따로 건다. 그래서 이 함수가 true인 프레임이
+ * 곧바로 판정 구간에 들어가는 것은 아니다.
+ */
+export function isEngagedStancePose(
+  feetGap: number,
+  kneeLeftDeg: number,
+  kneeRightDeg: number,
+): boolean {
+  if (!(feetGap >= STANCE.engagedFeetGapMin)) return false;
+  return Math.min(kneeLeftDeg, kneeRightDeg) <= STANCE.engagedKneeAngleMax;
+}
+
+/**
  * 채점에 쓸 구간을 찾는다.
  * 1순위는 "멈춰 있는 주춤서기" 구간. 없으면 유효 프레임이 이어지는 가장 긴 구간으로 물러선다
  * (이 경우 A5는 자동으로 미충족이다 — 멈춘 적이 없다는 뜻이므로).
@@ -121,19 +142,21 @@ export function findStanceWindow(
 
   const settledFlags = frames.map((_, i) => {
     if (!series.valid[i]) return false;
-    if (series.kneeLeft[i] > STANCE.engagedKneeAngleMax) return false;
-    if (series.kneeRight[i] > STANCE.engagedKneeAngleMax) return false;
-    if (!(series.feetGap[i] >= STANCE.engagedFeetGapMin)) return false;
+    if (!isEngagedStancePose(series.feetGap[i], series.kneeLeft[i], series.kneeRight[i])) {
+      return false;
+    }
     return speeds[i] <= STANCE.settleSpeedMaxMps;
   });
 
+  // 가장 긴 구간이 문턱에 못 미치면 다른 구간은 더 짧다 — 하나만 보면 된다.
+  // 한 프레임으로 족하다고 두면, 앉았다 곧바로 일어나느라 지나가는 길에 스친
+  // 한 프레임이 점수를 연다. 자세를 한 번도 유지하지 않은 사람이 받는 점수다.
   const settled = longestRun(settledFlags);
   if (settled !== null) {
-    return {
-      ...settled,
-      durationSeconds: (frames[settled.end].timeMs - frames[settled.start].timeMs) / 1000,
-      settled: true,
-    };
+    const durationSeconds = (frames[settled.end].timeMs - frames[settled.start].timeMs) / 1000;
+    if (durationSeconds >= STANCE.settledMinSeconds) {
+      return { ...settled, durationSeconds, settled: true };
+    }
   }
 
   const fallback = longestRun(series.valid);
@@ -284,7 +307,7 @@ function judgeHold(
       ...base,
       grade: gradeOf(STANCE.holdDeduction),
       deduction: STANCE.holdDeduction,
-      note: `자세가 멈춘 구간을 찾지 못했다. 유지 ${round(duration, 2)}초 구간은 무릎·발 간격 조건을 만족하지 못한다.`,
+      note: `자세가 멈춘 구간을 찾지 못했다. 무릎·발 간격·정지 조건을 함께 만족한 구간이 ${STANCE.settledMinSeconds}초 이상 이어지지 않았다. 아래 값은 유효 프레임이 이어지는 ${round(duration, 2)}초 구간에서 읽은 것이다.`,
     };
   }
 

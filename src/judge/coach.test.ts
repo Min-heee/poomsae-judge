@@ -10,7 +10,8 @@
 import { describe, expect, it } from "vitest";
 import { ruleCoach } from "./coach";
 import { judgeSequence } from "./judge";
-import type { CriterionResult, Judgement } from "./types";
+import { STANCE } from "./constants";
+import type { CriterionResult, Judgement, WithholdNote } from "./types";
 import { buildAllSamples } from "@/samples/build";
 
 /** 샘플은 한 번만 굽는다. 같은 시퀀스를 반복해 넣어야 결정성 테스트가 의미 있다. */
@@ -221,7 +222,7 @@ describe("항목 보류 — 판정이 남긴 사유를 그대로 옮긴다", () 
 });
 
 describe("전체 보류 — H4·H6 은 판정의 메시지를 그대로 쓴다", () => {
-  function withNotes(...notes: { code: "H4" | "H6"; message: string }[]): Judgement {
+  function withNotes(...notes: WithholdNote[]): Judgement {
     const base = judgeSample("stance-good");
     return { ...base, status: "withheld", score: null, withheld: notes };
   }
@@ -236,5 +237,59 @@ describe("전체 보류 — H4·H6 은 판정의 메시지를 그대로 쓴다",
     const message = "이 시퀀스는 카메라 각도를 '정면'으로 선언했는데, 앞차기 규칙은 '측면' 촬영을 전제한다.";
     const advice = ruleCoach(withNotes({ code: "H6", message }));
     expect(advice.points.map((p) => p.text)).toContain(message);
+  });
+});
+
+/**
+ * 총평 한 줄은 보류 사유에 따라 갈라져야 한다.
+ *
+ * 한 문장으로 뭉개 두었을 때 화면은 "무효 0%"를 찍어 놓고 총평은 "또렷하게 읽지
+ * 못했습니다"라고 말했다. 코칭 카드의 첫 문장이고, H7은 이제 실사용자가 가장 자주
+ * 만나는 보류다 — 여기가 틀리면 '못 보는 건 못 봤다고 한다'는 이 프로젝트의 주장이
+ * 가장 잘 보이는 자리에서 깨진다.
+ */
+describe("전체 보류 — 총평은 사유의 종류를 구분한다", () => {
+  function withCodes(...notes: WithholdNote[]): Judgement {
+    const base = judgeSample("stance-good");
+    return { ...base, status: "withheld", score: null, withheld: notes };
+  }
+
+  it("못 읽어서 보류면 읽기 이야기를 한다", () => {
+    const advice = ruleCoach(withCodes({ code: "H2", message: "무효 프레임이 많다." }));
+    expect(advice.headline).toContain("또렷하게 읽지 못했습니다");
+  });
+
+  it("H7이면 읽기가 아니라 자세 이야기를 한다", () => {
+    const advice = ruleCoach(withCodes({ code: "H7", message: "멈춘 구간이 없다." }));
+    expect(advice.headline).not.toContain("또렷하게 읽지 못했습니다");
+    expect(advice.headline).toContain("자세를 찾지 못했습니다");
+  });
+
+  it("H6이면 카메라 각도 전제 이야기를 한다", () => {
+    const advice = ruleCoach(withCodes({ code: "H6", message: "각도 전제가 다르다." }));
+    expect(advice.headline).toContain("카메라 각도");
+  });
+
+  it("H1 경고가 섞여 있어도 막은 사유가 H7뿐이면 자세 이야기를 한다", () => {
+    const advice = ruleCoach(
+      withCodes({ code: "H1", message: "흐린 프레임 3개." }, { code: "H7", message: "멈춘 구간이 없다." }),
+    );
+    expect(advice.headline).toContain("자세를 찾지 못했습니다");
+  });
+
+  it("읽기 문제가 함께 있으면 읽기 쪽을 말한다 — 자세를 봤다고 넘겨짚지 않는다", () => {
+    const advice = ruleCoach(
+      withCodes({ code: "H3", message: "프레임이 끊겼다." }, { code: "H7", message: "멈춘 구간이 없다." }),
+    );
+    expect(advice.headline).toContain("또렷하게 읽지 못했습니다");
+  });
+
+  it("H7 줄은 판정 메시지를 베끼지 않고 할 일을 적는다", () => {
+    const message = "주춤서기로 볼 멈춘 구간이 없다. 적어도 한쪽 무릎이 160° 이하로 …";
+    const advice = ruleCoach(withCodes({ code: "H7", message }));
+    const line = advice.points.find((p) => p.criterionId === "H7");
+    expect(line?.text).not.toBe(message);
+    expect(line?.text).toContain(`${STANCE.minHoldSeconds}초`);
+    expect(line?.tone).toBe("hold");
   });
 });

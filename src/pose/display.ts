@@ -17,7 +17,14 @@ import {
 } from "@/judge/constants";
 import { unitSuffix } from "@/judge/grading";
 import { LM } from "@/judge/landmarks";
-import type { CriterionResult, Grade, Judgement, MeasureUnit, MotionKind } from "@/judge/types";
+import type {
+  CriterionResult,
+  Grade,
+  Judgement,
+  MeasureUnit,
+  MotionKind,
+  WithholdCode,
+} from "@/judge/types";
 
 export { unitSuffix };
 
@@ -325,44 +332,52 @@ export const RULE_TABLE: Record<MotionKind, { title: string; rows: RuleRow[] }> 
  * 항목만 빠졌는가"를 눌러 본 사람이 규칙 표에서 그 근거를 찾지 못하면,
  * 경계값을 드러내겠다는 약속(PRD 1절)이 그 자리에서 깨진다.
  */
-export const HOLD_RULES: { code: string; text: string }[] = [
-  {
-    code: "H1",
-    text: `필수 8점(어깨·엉덩이·무릎·발목) 중 하나라도 visibility < ${WITHHOLD.minVisibility} → 그 프레임 무효`,
-  },
-  {
-    code: "H2",
-    text: `무효 프레임 비율 > ${(WITHHOLD.maxInvalidRatio * 100).toFixed(0)}% → 전체 보류`,
-  },
-  {
-    code: "H3",
-    text: `인접 프레임 간격 > ${WITHHOLD.maxFrameGapMs}ms → 보류 (그 이하는 선형 보간으로 메움)`,
-  },
-  {
-    code: "H4",
-    text:
-      `지표가 등급 경계의 ±ε 안 → 그 항목만 보류하고 총점에서 제외. ` +
-      `ε는 각도 ${EPSILON.deg}°, 비율 ${EPSILON.ratio}·S, 시간 ${EPSILON.seconds}초, ` +
-      `그리고 문턱이 아주 작은 지표(A5 흔들림)는 문턱의 ±${EPSILON.relative * 100}%`,
-  },
-  {
-    code: "H5",
-    text: `항목 보류가 ${WITHHOLD.maxWithheldCriteria}개 이상 → 전체 판정 보류`,
-  },
-  {
-    code: "H6",
-    text:
-      `선언된 카메라 각도가 규칙의 전제와 다름 → 전체 보류 ` +
-      `(주춤서기 ${VIEW_LABEL_KO[REQUIRED_VIEW.stance]}, 앞차기 ${VIEW_LABEL_KO[REQUIRED_VIEW.frontKick]} 전제)`,
-  },
-  {
-    code: "H7",
-    text:
-      `주춤서기로 볼 멈춘 구간이 없음 → 전체 보류 ` +
-      `(양쪽 무릎 ${STANCE.engagedKneeAngleMax}° 이하 · 발 간격 ${STANCE.engagedFeetGapMin}·S 이상 · ` +
-      `엉덩이 상하 속도 ${STANCE.settleSpeedMaxMps}m/s 이하인 프레임이 하나도 없음)`,
-  },
-];
+export interface HoldRule {
+  code: WithholdCode;
+  text: string;
+  /**
+   * 이 보류가 한 동작에서만 발화하면 그 동작. 없으면 두 동작 모두에 해당한다.
+   * 앞차기 규칙 표를 펼친 사람에게 주춤서기 전용 조건을 규칙으로 들이밀지 않으려는 것.
+   */
+  motion?: MotionKind;
+}
+
+/**
+ * 코드 → 문장. **`Record<WithholdCode, …>` 인 것이 핵심이다** — 보류 코드를 하나
+ * 더하고 여기 행을 빠뜨리면 컴파일이 실패한다. 배열로 두었을 때는 코드를 더해도
+ * 규칙 표가 조용했고, 화면에는 코드 없는 보류만 남았다.
+ */
+const HOLD_RULE_TEXT: Record<WithholdCode, string> = {
+  H1: `필수 8점(어깨·엉덩이·무릎·발목) 중 하나라도 visibility < ${WITHHOLD.minVisibility} → 그 프레임 무효`,
+  H2: `무효 프레임 비율 > ${(WITHHOLD.maxInvalidRatio * 100).toFixed(0)}% → 전체 보류`,
+  H3: `인접 프레임 간격 > ${WITHHOLD.maxFrameGapMs}ms → 보류 (그 이하는 선형 보간으로 메움)`,
+  H4:
+    `지표가 등급 경계의 ±ε 안 → 그 항목만 보류하고 총점에서 제외. ` +
+    `ε는 각도 ${EPSILON.deg}°, 비율 ${EPSILON.ratio}·S, 시간 ${EPSILON.seconds}초, ` +
+    `그리고 문턱이 아주 작은 지표(A5 흔들림)는 문턱의 ±${EPSILON.relative * 100}%`,
+  H5: `항목 보류가 ${WITHHOLD.maxWithheldCriteria}개 이상 → 전체 판정 보류`,
+  H6:
+    `선언된 카메라 각도가 규칙의 전제와 다름 → 전체 보류 ` +
+    `(주춤서기 ${VIEW_LABEL_KO[REQUIRED_VIEW.stance]}, 앞차기 ${VIEW_LABEL_KO[REQUIRED_VIEW.frontKick]} 전제)`,
+  H7:
+    `주춤서기로 볼 멈춘 구간이 없음 → 전체 보류 ` +
+    `(적어도 한쪽 무릎 ${STANCE.engagedKneeAngleMax}° 이하 · 발 간격 ${STANCE.engagedFeetGapMin}·S 이상 · ` +
+    `엉덩이 상하 속도 ${STANCE.settleSpeedMaxMps}m/s 이하인 구간이 ${STANCE.settledMinSeconds}초 이상 이어진 적 없음)`,
+};
+
+/** 동작을 가리지 않는 보류만 남기고, 특정 동작 전용은 여기에 적는다. */
+const HOLD_RULE_MOTION: Partial<Record<WithholdCode, MotionKind>> = {
+  H7: "stance",
+};
+
+export const HOLD_RULES: HoldRule[] = (Object.keys(HOLD_RULE_TEXT) as WithholdCode[]).map(
+  (code) => ({ code, text: HOLD_RULE_TEXT[code], motion: HOLD_RULE_MOTION[code] }),
+);
+
+/** 이 동작의 규칙 표 아래에 띄울 보류 규칙. */
+export function holdRulesFor(motion: MotionKind): HoldRule[] {
+  return HOLD_RULES.filter((h) => h.motion === undefined || h.motion === motion);
+}
 
 /**
  * 숫자 뒤에 붙는 '으로 / 로'.

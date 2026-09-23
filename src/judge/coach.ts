@@ -138,6 +138,29 @@ function holdSentence(w: WithholdNote): string {
   }
 }
 
+/**
+ * 전체 보류의 총평 한 줄.
+ *
+ * 보류 사유는 두 갈래다. **못 읽은 것**(H1~H5: 흐리다·끊겼다·경계에 붙었다)과
+ * **읽었지만 채점할 것이 없는 것**(H6 카메라 각도 전제, H7 자세 아님).
+ * 한 문장으로 뭉개면 화면이 "무효 0%"를 찍어 놓고 총평은 "또렷하게 읽지 못했습니다"라고
+ * 말하는 일이 생긴다 — 코칭이 판정에 없는 말을 하는 자리다(PRD 6절).
+ *
+ * H6이 H7보다 앞선다. 전제한 평면이 아니면 각도·비율이 전부 다른 값이므로
+ * "자세가 아니었다"는 관측 자체를 믿을 수 없다.
+ */
+function withheldHeadline(motion: string, notes: readonly WithholdNote[]): string {
+  const codes = new Set(notes.map((w) => w.code));
+  const readingIssue = [...codes].some((c) => c !== "H6" && c !== "H7");
+  if (readingIssue) {
+    return `${motion}: 판정을 보류했습니다. 채점할 만큼 또렷하게 읽지 못했습니다.`;
+  }
+  if (codes.has("H6")) {
+    return `${motion}: 판정을 보류했습니다. 규칙이 전제한 카메라 각도가 아닙니다.`;
+  }
+  return `${motion}: 판정을 보류했습니다. 프레임은 읽었지만 채점할 자세를 찾지 못했습니다.`;
+}
+
 /** 감점 큰 것부터. 같으면 항목 번호 순 — 순서가 흔들리면 결정성이 깨진다. */
 function bySeverity(a: CriterionResult, b: CriterionResult): number {
   if (b.deduction !== a.deduction) return b.deduction - a.deduction;
@@ -159,7 +182,7 @@ export function ruleCoach(judgement: Judgement): CoachAdvice {
     const blocking = judgement.withheld.filter((w) => w.code !== "H1");
     const notes = blocking.length > 0 ? blocking : judgement.withheld;
     return {
-      headline: `${motion}: 판정을 보류했습니다. 채점할 만큼 또렷하게 읽지 못했습니다.`,
+      headline: withheldHeadline(motion, notes),
       points: notes.map((w) => ({
         criterionId: w.code,
         text: holdSentence(w),
