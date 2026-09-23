@@ -94,6 +94,22 @@ const FEEDBACK_MS = PHASE_SECONDS.feedback * 1000;
 
 type Mode = "demo" | "webcam";
 
+/**
+ * 카드에 박을 날짜 — **보는 사람의 달력 날짜**다.
+ *
+ * `toISOString()` 은 UTC 라 한국에서는 자정부터 오전 9시까지 **어제 날짜**를 찍는다.
+ * 인증서처럼 생긴 카드에 적히는 몇 안 되는 사실 중 하나가 날짜이고, 파일 이름
+ * (`poomsae-20260924-…`)도 이 값에서 나온다. 화면이 거짓말을 하지 않는다는 원칙이
+ * 시계에도 걸린다 — 그래서 UTC 가 아니라 지역 날짜를 넘긴다.
+ *
+ * 카드 층은 여전히 시계를 읽지 않는다(`src/card/purity.test.ts` 가 막는다).
+ * 날짜를 정하는 것은 호출자의 몫이고, 그 몫이 여기다.
+ */
+function localDateISO(now: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
 /** 제시 단계에 띄우는 한 줄. 화면 문구라 이 층에 둔다(판정에도 비교에도 쓰이지 않는다). */
 const CUE: Record<MotionKind, string> = {
   stance: "발을 어깨너비 두 배로 벌리고, 앉듯이 무릎을 굽혀 멈추세요.",
@@ -576,8 +592,8 @@ export function FollowGame() {
       },
       {
         courseLabel: course.labelKo,
-        // 카드 안에서 시계를 읽지 않는다 — 날짜는 호출자가 넘긴다.
-        dateISO: new Date().toISOString().slice(0, 10),
+        // 카드 안에서 시계를 읽지 않는다 — 날짜는 호출자가 넘긴다(지역 달력 기준).
+        dateISO: localDateISO(new Date()),
         originLabel: mode === "webcam" ? "웹캠 실시간" : "합성 샘플 파일",
         bestRoundNumber: bestIndex + 1,
         skeleton: {
