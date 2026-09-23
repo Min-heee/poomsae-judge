@@ -158,7 +158,7 @@
 
 | 항목 | 값 |
 |---|---|
-| 테스트 | 529개 / 21파일 통과. **판정 코어 303개는 그대로**(judge 224 · pose 46 · samples 33) |
+| 테스트 | 531개 / 21파일 통과. **판정 코어 303개는 그대로**(judge 224 · pose 46 · samples 33) |
 | 샘플 7종 판정 | 판정 전체를 덤프해 `diff` → **27,457바이트 바이트 동일**. `npm run samples` 드리프트 0 |
 | 규칙 코어 | `src/judge` · `public/samples` · `src/samples/rig.ts` 바이트 동일 |
 | First Load JS | 홈 138 kB · `/game` 162 kB (상한 200 kB, 이전 홈 131 kB) |

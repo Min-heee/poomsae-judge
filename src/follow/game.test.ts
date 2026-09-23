@@ -163,6 +163,23 @@ describe("준비 자세가 채점될 경로가 없다", () => {
   });
 });
 
+describe("카메라 각도는 선언이고, 게임도 그 선언을 그대로 넘긴다", () => {
+  it("전제와 다른 각도를 선언하면 점수 대신 H6 보류가 나온다", () => {
+    // 게임이 코스의 각도를 그대로 넘기기만 하면 H6 은 **영영 발화할 수 없다.**
+    // 그런데 화면은 "각도가 다르면 보류합니다"라고 약속한다. 그 약속이 참이려면
+    // 사람이 선언한 값이 여기까지 흘러와야 한다 — 그 경로를 시험으로 고정한다.
+    const r = judgeRound(stanceRound(holdGood(), { view: "sagittal" }));
+    expect(r.status).toBe("withheld");
+    expect(r.baseScore).toBeNull();
+    expect(r.score).toBe(0);
+    expect(r.judgement?.withheld.map((w) => w.code)).toContain("H6");
+  });
+
+  it("전제와 같은 각도면 그대로 채점한다", () => {
+    expect(judgeRound(stanceRound(holdGood(), { view: "frontal" })).status).toBe("scored");
+  });
+});
+
 describe("가장 잘 맞은 창을 고른다", () => {
   it("전반이 나쁘고 후반이 좋으면 후반을 채택한다", () => {
     const frames = record(6, (t) => buildStanceFrame(t < 3 ? NARROW_JUCHUM : GOOD_JUCHUM));

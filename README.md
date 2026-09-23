@@ -291,7 +291,7 @@ npm run verify     # test → typecheck → lint → build 를 한 번에
 
 | 명령 | 결과 |
 |---|---|
-| `npx vitest run` | **529 passed / 21 files** (판정 코어 303개는 그대로) |
+| `npx vitest run` | **531 passed / 21 files** (판정 코어 303개는 그대로) |
 | `npx tsc --noEmit` | 0 errors |
 | `npm run lint` | 0 errors, 0 warnings |
 | `npm run build` | `output:'export'` 성공, First Load JS 홈 138 kB · `/game` 162 kB |
