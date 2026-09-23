@@ -1,7 +1,7 @@
 /**
  * 판정 진입점.
  *
- * 규칙 A·B가 항목별 감점을 내고, 이 파일이 보류 조건(H2·H3·H4·H5)을 얹어
+ * 규칙 A·B가 항목별 감점을 내고, 이 파일이 보류 조건(H1~H7)을 얹어
  * 최종 점수 또는 "판정 보류"를 만든다.
  *
  * 보류는 실패가 아니다. 0점과 보류는 다른 결과이고, 그래서 score는 number | null 이다.
@@ -13,6 +13,7 @@ import {
   NOT_MEASURED,
   REQUIRED_VIEW,
   RULES_VERSION,
+  STANCE,
   VIEW_LABEL_KO,
   WITHHOLD,
 } from "./constants";
@@ -147,6 +148,7 @@ export function judgeSequence(sequence: LandmarkSequence): Judgement {
   let judgedFrom: number | null = null;
   let judgedTo: number | null = null;
   let judgedDurationMs: number | null = null;
+  let stanceNotSettled = false;
 
   if (sequence.motion === "stance") {
     const outcome = judgeStance(prepared);
@@ -163,6 +165,29 @@ export function judgeSequence(sequence: LandmarkSequence): Judgement {
       judgedFrom = prepared.frames[outcome.window.start].sourceIndex;
       judgedTo = prepared.frames[outcome.window.end].sourceIndex;
       judgedDurationMs = outcome.window.durationSeconds * 1000;
+
+      // --- H7 : 주춤서기로 볼 멈춘 구간이 없다 --------------------------------
+      // window.settled 가 false면 구간 탐지가 "유효 프레임이 이어지는 가장 긴 구간"으로
+      // 물러섰다는 뜻이다(stance.ts findStanceWindow). 즉 주춤서기라고 볼 프레임이
+      // 하나도 없었다. 그런데 A3(좌우 대칭)·A4(상체 수직)는 가만히 서 있기만 해도
+      // 통과하므로, 그대로 두면 차렷 자세가 감점 몇 개만 붙은 '판정 완료'로 나온다.
+      // **나쁜 자세와 자세 아님은 다른 결과다.** 후자에는 점수를 만들지 않는다.
+      //
+      // 문턱은 가장 좁게 잡았다 — 주춤서기로 볼 프레임이 하나라도 있으면 채점하고,
+      // 그 구간이 짧다는 사실은 A5가 감점으로 말한다. 여기서 길이까지 요구하면
+      // A5가 이미 하는 말을 보류가 다시 하게 된다.
+      if (!outcome.window.settled) {
+        stanceNotSettled = true;
+        withheld.push({
+          code: "H7",
+          message:
+            `주춤서기로 볼 멈춘 구간이 없다. 양쪽 무릎이 ${STANCE.engagedKneeAngleMax}° 이하로 굽고, ` +
+            `발 간격이 어깨 너비의 ${STANCE.engagedFeetGapMin}배 이상이며, 엉덩이가 ` +
+            `${STANCE.settleSpeedMaxMps}m/s 이하로 멈춰 있는 프레임이 하나도 없었다. ` +
+            `그냥 서 있는 것과 주춤서기를 가를 수 없으므로 채점하지 않는다. ` +
+            `무릎을 굽혀 발을 벌린 자세로 ${STANCE.minHoldSeconds}초 이상 멈춘 뒤 다시 재면 채점한다.`,
+        });
+      }
     }
   } else {
     const outcome = judgeFrontKick(prepared);
@@ -203,6 +228,7 @@ export function judgeSequence(sequence: LandmarkSequence): Judgement {
   }
 
   const sequenceWithheld =
+    stanceNotSettled ||
     viewMismatch ||
     overInvalidRatio ||
     unfilledGaps.length > 0 ||

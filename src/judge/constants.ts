@@ -14,7 +14,7 @@
 import type { CameraView, MotionKind } from "./types";
 
 /** 규칙표 버전. 경계값이나 감점이 바뀌면 올린다. 과거 판정과 섞이지 않게 하는 표시다. */
-export const RULES_VERSION = "A/B-1.0.0";
+export const RULES_VERSION = "A/B-1.1.0";
 
 /** 동작 하나의 만점. 여기서 감점을 뺀다. */
 export const MAX_SCORE = 10.0;

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { EPSILON, METRIC_LABEL, STANCE } from "./constants";
 import { judgeSequence } from "./judge";
-import type { CriterionResult, Grade } from "./types";
+import type { CriterionResult, Grade, LandmarkSequence } from "./types";
 import { staticStanceSequence, type StanceFixtureOptions } from "../samples/fixtures";
 
 function criterion(id: string, opts: StanceFixtureOptions = {}): CriterionResult {
@@ -167,6 +167,94 @@ describe("A5 유지·흔들림", () => {
 
   it("흔들림 문턱은 S에 비례한다 — 경계값을 그대로 노출한다", () => {
     expect(criterion("A5", { frames: 40, fps }).boundaries).toEqual([STANCE.maxHipSwayRatio]);
+  });
+});
+
+/**
+ * 차렷 — 발을 모으고 무릎을 편 채 가만히 서 있는 자세.
+ * 구간 탐지 조건(무릎 ≤ 160°, 발 간격 ≥ 1.2·S) 중 둘을 동시에 어긴다.
+ */
+const STANDING_STILL: StanceFixtureOptions = {
+  gapRatio: 0.35,
+  kneeLeftDeg: 178,
+  kneeRightDeg: 177,
+  torsoTiltDeg: 2,
+};
+
+/** 차렷으로 선 시퀀스에서 한 프레임만 제대로 된 주춤서기로 바꾼다. 타임스탬프는 그대로다. */
+function standingWithOneStanceFrame(index: number, frames = 40): LandmarkSequence {
+  const standing = staticStanceSequence({ ...STANDING_STILL, frames });
+  const stance = staticStanceSequence({ frames });
+  return {
+    ...standing,
+    frames: standing.frames.map((f, i) =>
+      i === index ? { t: f.t, landmarks: stance.frames[i].landmarks } : f,
+    ),
+  };
+}
+
+describe("H7 주춤서기로 볼 멈춘 구간", () => {
+  it("차렷으로 가만히 서 있으면 점수를 내지 않는다", () => {
+    // 이 입력의 A3(좌우 대칭)·A4(상체 수직)는 가만히 서 있다는 이유만으로 통과한다.
+    // H7이 없으면 A1·A2 감점만 붙은 '판정 완료'가 되어 9.3점이 나왔다.
+    const j = judgeSequence(staticStanceSequence({ ...STANDING_STILL, frames: 40 }));
+    expect(j.status).toBe("withheld");
+    expect(j.score).toBeNull();
+    expect(j.withheld.map((w) => w.code)).toContain("H7");
+  });
+
+  it("보류 사유에 실제 경계값과 할 일을 적는다", () => {
+    const j = judgeSequence(staticStanceSequence({ ...STANDING_STILL, frames: 40 }));
+    const h7 = j.withheld.find((w) => w.code === "H7");
+    expect(h7?.message).toContain(`${STANCE.engagedKneeAngleMax}°`);
+    expect(h7?.message).toContain(`${STANCE.engagedFeetGapMin}배`);
+    expect(h7?.message).toContain(`${STANCE.minHoldSeconds}초`);
+  });
+
+  it("감점은 되지만 자세를 잡은 경우는 그대로 채점한다", () => {
+    // 발 1.55(0.1 감점) · 무릎 155°(0.1 감점). "나쁜 자세"는 보류가 아니라 감점이다.
+    const j = judgeSequence(
+      staticStanceSequence({ frames: 40, gapRatio: 1.55, kneeLeftDeg: 155, kneeRightDeg: 155 }),
+    );
+    expect(j.status).toBe("judged");
+    expect(j.score).toBe(9.8);
+    expect(j.withheld.map((w) => w.code)).not.toContain("H7");
+  });
+
+  it("정상 주춤서기는 보류가 하나도 붙지 않는다", () => {
+    const j = judgeSequence(staticStanceSequence({ frames: 40 }));
+    expect(j.status).toBe("judged");
+    expect(j.score).toBe(10);
+    expect(j.withheld).toEqual([]);
+  });
+
+  it("문턱은 한 프레임이다 — 주춤서기로 볼 프레임이 하나라도 있으면 채점한다", () => {
+    // 같은 40프레임인데 19번 한 프레임만 주춤서기다. 그 한 프레임이 있으면 H7은 닫히지 않고,
+    // "구간이 짧다"는 사실은 A5가 0.1 감점으로 말한다. 보류는 '자세 아님'에만 쓴다.
+    const judged = judgeSequence(standingWithOneStanceFrame(19));
+    expect(judged.status).toBe("judged");
+    expect(judged.withheld.map((w) => w.code)).not.toContain("H7");
+    expect(judged.criteria.find((c) => c.id === "A5")?.grade).toBe("minor");
+
+    // 그 한 프레임을 되돌리면(= 전부 차렷) 같은 길이·같은 fps인데 보류로 넘어간다.
+    const withheld = judgeSequence(staticStanceSequence({ ...STANDING_STILL, frames: 40 }));
+    expect(withheld.status).toBe("withheld");
+    expect(withheld.withheld.map((w) => w.code)).toContain("H7");
+  });
+
+  it("무릎만 편 채 발을 벌려도 주춤서기가 아니다", () => {
+    const j = judgeSequence(
+      staticStanceSequence({ frames: 40, gapRatio: 2.0, kneeLeftDeg: 178, kneeRightDeg: 177 }),
+    );
+    expect(j.status).toBe("withheld");
+    expect(j.withheld.map((w) => w.code)).toContain("H7");
+  });
+
+  it("보류여도 감점 항목은 그대로 남는다 — 왜 보류인지 읽을 수 있어야 한다", () => {
+    const j = judgeSequence(staticStanceSequence({ ...STANDING_STILL, frames: 40 }));
+    expect(j.score).toBeNull();
+    expect(j.criteria.find((c) => c.id === "A1")?.deduction).toBeGreaterThan(0);
+    expect(j.criteria.find((c) => c.id === "A2")?.deduction).toBeGreaterThan(0);
   });
 });
 

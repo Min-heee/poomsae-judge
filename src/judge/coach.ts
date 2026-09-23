@@ -27,7 +27,7 @@
  * 이 파일의 `ruleCoach` 를 감싸면 된다.
  */
 
-import { MAX_SCORE, MOTION_LABEL_KO } from "./constants";
+import { MAX_SCORE, MOTION_LABEL_KO, STANCE } from "./constants";
 import type { CriterionResult, Judgement, WithholdNote } from "./types";
 
 /** 코칭 한 줄. 화면이 근거로 되짚을 수 있게 출처 항목과 프레임을 달고 다닌다. */
@@ -106,9 +106,9 @@ function fixSentence(c: CriterionResult): string {
 }
 
 /**
- * 보류 사유를 사람 말로. 코드(H1~H6)는 화면이 따로 보여 주므로 여기선 뜻만 적는다.
+ * 보류 사유를 사람 말로. 코드(H1~H7)는 화면이 따로 보여 주므로 여기선 뜻만 적는다.
  *
- * H1·H2·H3·H5·H6은 사유가 코드 하나에 하나뿐이라 뜻을 풀어 적을 수 있다.
+ * H1·H2·H3·H5·H6·H7은 사유가 코드 하나에 하나뿐이라 뜻을 풀어 적을 수 있다.
  * **H4는 다르다.** 같은 코드 아래 서로 다른 사유가 들어온다 — 관절이 겹쳐
  * 값을 못 낸 경우, S를 못 구한 경우, 유지 시간이 경계의 ±ε 안인 경우, 흔들림이
  * 경계의 ±5% 안인 경우, 그리고 일반적인 등급 경계 근접. 이것을 한 문장으로
@@ -127,6 +127,11 @@ function holdSentence(w: WithholdNote): string {
       return "채점하지 못한 항목이 많아 전체 판정을 보류했습니다.";
     case "H6":
       return w.message;
+    case "H7":
+      return (
+        `주춤서기로 볼 만큼 멈춘 구간이 없어 채점하지 않았습니다. ` +
+        `무릎을 굽혀 발을 벌린 자세로 ${STANCE.minHoldSeconds}초 이상 멈춘 뒤 다시 찍어 주세요.`
+      );
     case "H4":
     default:
       return w.message;

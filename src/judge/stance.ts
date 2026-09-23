@@ -98,7 +98,11 @@ export interface StanceWindow {
   start: number;
   end: number;
   durationSeconds: number;
-  /** 구간 탐지 조건까지 만족했는가. false면 유효 프레임만으로 잡은 대체 구간이다. */
+  /**
+   * 구간 탐지 조건까지 만족했는가. false면 유효 프레임만으로 잡은 대체 구간이다.
+   * A5가 이 값을 읽어 "멈춘 구간을 찾지 못했다"로 감점하고, judge.ts가 같은 값을
+   * 읽어 전체 보류 H7을 건다 — 멈춘 적이 없으면 채점할 주춤서기가 없다는 뜻이므로.
+   */
   settled: boolean;
 }
 

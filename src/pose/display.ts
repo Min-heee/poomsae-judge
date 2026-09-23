@@ -355,6 +355,13 @@ export const HOLD_RULES: { code: string; text: string }[] = [
       `선언된 카메라 각도가 규칙의 전제와 다름 → 전체 보류 ` +
       `(주춤서기 ${VIEW_LABEL_KO[REQUIRED_VIEW.stance]}, 앞차기 ${VIEW_LABEL_KO[REQUIRED_VIEW.frontKick]} 전제)`,
   },
+  {
+    code: "H7",
+    text:
+      `주춤서기로 볼 멈춘 구간이 없음 → 전체 보류 ` +
+      `(양쪽 무릎 ${STANCE.engagedKneeAngleMax}° 이하 · 발 간격 ${STANCE.engagedFeetGapMin}·S 이상 · ` +
+      `엉덩이 상하 속도 ${STANCE.settleSpeedMaxMps}m/s 이하인 프레임이 하나도 없음)`,
+  },
 ];
 
 /**

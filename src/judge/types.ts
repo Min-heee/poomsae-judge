@@ -103,7 +103,7 @@ export interface NotMeasured {
   reason: string;
 }
 
-export type WithholdCode = "H1" | "H2" | "H3" | "H4" | "H5" | "H6";
+export type WithholdCode = "H1" | "H2" | "H3" | "H4" | "H5" | "H6" | "H7";
 
 export interface WithholdNote {
   code: WithholdCode;
